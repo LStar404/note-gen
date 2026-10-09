@@ -1,0 +1,126 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: #f5f6f8; color: #1f2328; }
+
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+.toolbar {
+  display: flex; gap: 8px; align-items: center; padding: 8px 12px;
+  background: #ffffff; border-bottom: 1px solid #d8dce3; flex-wrap: wrap;
+}
+.toolbar select, .toolbar button, .toolbar input, .file-button {
+  padding: 6px 10px; border: 1px solid #c9ced8; border-radius: 6px;
+  background: #fff; font-size: 13px; cursor: pointer;
+}
+.toolbar input { cursor: text; }
+.file-button { display: inline-block; }
+.search-box { position: relative; margin-left: auto; }
+.search-results {
+  position: absolute; right: 0; top: 36px; width: 320px; max-height: 320px;
+  overflow: auto; background: #fff; border: 1px solid #d8dce3; border-radius: 8px;
+  padding: 8px; z-index: 30; box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+}
+.search-item { padding: 4px 6px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.search-item:hover { background: #eef2ff; }
+
+.columns { display: grid; grid-template-columns: 1.1fr 1.1fr 0.9fr; gap: 10px; padding: 10px; flex: 1; min-height: 0; }
+
+.pdf-pane, .notes-pane, .detail-panel {
+  background: #fff; border: 1px solid #d8dce3; border-radius: 10px;
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+}
+.pdf-toolbar, .notes-toolbar {
+  display: flex; gap: 6px; align-items: center; padding: 6px 10px; border-bottom: 1px solid #eceff3;
+}
+.pdf-toolbar button, .notes-toolbar button, .detail-panel button, .agent-bar button,
+.block-editor button, .modal button {
+  padding: 4px 10px; border: 1px solid #c9ced8; border-radius: 6px; background: #fff; cursor: pointer;
+}
+.notes-toolbar button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+.page-indicator { font-size: 12px; color: #55607a; }
+
+.pdf-scroll { overflow: auto; padding: 12px; background: #eef1f5; flex: 1; }
+.pdf-page { position: relative; margin: 0 auto; width: fit-content; background: #fff; box-shadow: 0 4px 18px rgba(0,0,0,0.15); }
+.pdf-page canvas { display: block; }
+.text-layer { position: absolute; inset: 0; overflow: hidden; opacity: 0.25; line-height: 1; }
+.text-layer span { position: absolute; white-space: pre; transform-origin: 0 0; cursor: text; }
+.highlight-layer { position: absolute; inset: 0; pointer-events: none; }
+.highlight { position: absolute; border-radius: 3px; }
+.highlight.pulse { animation: pulse 2s ease-out; }
+@keyframes pulse {
+  0% { filter: brightness(1.6); }
+  100% { filter: brightness(1); }
+}
+
+.notes-pane { padding-bottom: 8px; }
+.block-list { overflow: auto; padding: 10px; flex: 1; }
+.block-card {
+  border: 1px solid #e2e6ee; border-radius: 10px; padding: 10px; margin-bottom: 10px;
+  background: #fff; cursor: pointer;
+}
+.block-card:hover { border-color: #9db4f0; }
+.block-card.selected { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.18); }
+.block-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.block-title { font-weight: 600; }
+.block-preview { color: #59636f; font-size: 12px; margin-top: 6px; white-space: pre-wrap; }
+.block-sources { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+.source-badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  background: #eef2ff; border: 1px solid #c7d2fe; color: #3730a3; cursor: pointer;
+}
+.badge { font-size: 10px; padding: 2px 6px; border-radius: 999px; background: #eef1f5; color: #445; }
+.badge.protected { background: #dcfce7; color: #166534; }
+.badge.synthesis { background: #f1f5f9; color: #475569; }
+.status-needs_review { background: #fef3c7; color: #92400e; }
+.status-manually_edited { background: #dcfce7; color: #166534; }
+
+.block-editor, .block-preview-view { padding: 10px; background: #f8fafc; border-top: 1px solid #eceff3; }
+.block-editor input, .block-editor textarea {
+  width: 100%; padding: 6px 8px; border: 1px solid #c9ced8; border-radius: 6px; font-size: 13px;
+}
+.block-editor textarea { font-family: ui-monospace, Consolas, monospace; margin-top: 6px; }
+.editor-actions { display: flex; gap: 8px; margin-top: 8px; }
+.error { color: #b91c1c; font-size: 12px; margin-top: 6px; }
+
+.agent-bar { border-top: 1px solid #eceff3; padding: 8px 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+.agent-bar input { flex: 1; min-width: 220px; padding: 6px 8px; border: 1px solid #c9ced8; border-radius: 6px; }
+.plan-panel, .diff-bar {
+  flex-basis: 100%; background: #f8fafc; border: 1px dashed #c9ced8;
+  border-radius: 8px; padding: 8px; font-size: 12px;
+}
+.diff-bar { display: flex; gap: 10px; align-items: center; background: #ecfdf5; border-color: #6ee7b7; }
+
+.detail-panel { padding: 10px; overflow: auto; }
+.detail-panel h3 { margin: 8px 0; font-size: 14px; }
+.detail-panel h4 { margin: 10px 0 4px; font-size: 12px; color: #55607a; }
+.hit-card { border: 1px solid #e2e6ee; border-radius: 8px; padding: 8px; margin-bottom: 8px; cursor: pointer; }
+.source-row { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
+.history-row { display: flex; gap: 6px; align-items: center; font-size: 11px; margin-bottom: 4px; flex-wrap: wrap; }
+.detail-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.muted { color: #6b7280; font-size: 12px; }
+.empty { color: #8a93a3; font-size: 12px; padding: 10px; }
+
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(15,23,42,0.35);
+  display: flex; align-items: center; justify-content: center; z-index: 50;
+}
+.modal {
+  width: min(760px, 92vw); max-height: 86vh; overflow: auto;
+  background: #fff; border-radius: 12px; padding: 18px;
+}
+.provider-card { border: 1px solid #e2e6ee; border-radius: 8px; padding: 10px; margin: 8px 0; }
+.model-row { display: flex; gap: 10px; align-items: center; font-size: 12px; margin: 4px 0; }
+.route-row { display: flex; gap: 10px; align-items: center; margin: 6px 0; font-size: 13px; }
+.route-row span { width: 80px; }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; }
+.usage-table th, .usage-table td { border: 1px solid #e2e6ee; padding: 4px 6px; text-align: left; }
+.review-row { border-bottom: 1px solid #eceff3; padding: 8px 0; }
+
+.toast {
+  position: fixed; right: 18px; bottom: 18px; background: #111827; color: #fff;
+  padding: 10px 14px; border-radius: 8px; font-size: 13px; z-index: 60;
+}
