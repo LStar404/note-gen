@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { ReactElement } from "react";
 import { api } from "../api/client";
-import { pdfRectToScreen, screenRectToPdf, type Rect, type ScreenRect } from "./coord";
+import HighlightLayer, { type HighlightRect } from "../components/HighlightLayer";
+import { pdfRectToScreen, screenRectToPdf, type Rect } from "./coord";
 import { useStore } from "../state/store";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -24,11 +25,6 @@ const RELATION_COLORS: Record<string, string> = {
   summarizes: "rgba(14,165,233,0.28)",
 };
 
-interface HighlightRect extends ScreenRect {
-  color: string;
-  pulse: boolean;
-}
-
 export default function PdfPane(): ReactElement {
   const docId = useStore((s) => s.docId);
   const pdfPage = useStore((s) => s.pdfPage);
@@ -46,6 +42,7 @@ export default function PdfPane(): ReactElement {
   const [scale, setScale] = useState(1.2);
   const [textItems, setTextItems] = useState<any[]>([]);
   const [pageLabels, setPageLabels] = useState<string[] | null>(null);
+  const [renderKey, setRenderKey] = useState(0);
 
   useEffect(() => {
     if (!docId) return;
@@ -70,6 +67,7 @@ export default function PdfPane(): ReactElement {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docId]);
 
   useEffect(() => {
@@ -96,13 +94,14 @@ export default function PdfPane(): ReactElement {
       const content = await page.getTextContent();
       if (cancelled) return;
       setTextItems(content.items);
+      setRenderKey((k) => k + 1);
     })();
     return () => {
       cancelled = true;
     };
   }, [docId, pdfPage, scale]);
 
-  // 翻页联动（7.3）：预取前后各 1 页
+  // 翻页联动（6.3/7.3）：预取前后各 1 页
   useEffect(() => {
     if (!docId || !numPages) return;
     [pdfPage - 1, pdfPage + 1].forEach((p) => {
@@ -116,19 +115,25 @@ export default function PdfPane(): ReactElement {
     const viewport = viewportRef.current;
     const out: HighlightRect[] = [];
     if (!viewport) return out;
-    const push = (bbox: Rect, color: string, pulse: boolean) => {
-      out.push({ ...pdfRectToScreen(bbox, viewport), color, pulse });
+    const push = (bbox: Rect, color: string, pulse: boolean, anchorId?: string) => {
+      out.push({ ...pdfRectToScreen(bbox, viewport), color, pulse, anchorId });
     };
     if (highlight && highlight.page === pdfPage) {
-      push(highlight.bbox, "rgba(59,130,246,0.35)", true);
+      push(highlight.bbox, "rgba(59,130,246,0.35)", true, highlight.anchor_id);
     }
     for (const hit of selectionHits) {
       if (hit.page === pdfPage && (!highlight || hit.anchor_id !== highlight.anchor_id)) {
-        push(hit.bbox, RELATION_COLORS[hit.match] ?? "rgba(245,158,11,0.3)", false);
+        push(hit.bbox, RELATION_COLORS[hit.match] ?? "rgba(245,158,11,0.3)", false, hit.anchor_id);
       }
     }
     return out;
-  }, [highlight, selectionHits, pdfPage, scale, textItems]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlight, selectionHits, pdfPage, scale, renderKey]);
+
+  const scrollTarget = useMemo(
+    () => (highlight && highlight.page === pdfPage ? highlights[highlights.length - 1] ?? null : null),
+    [highlight, highlights, pdfPage]
+  );
 
   const onMouseUp = () => {
     const viewport = viewportRef.current;
@@ -159,16 +164,12 @@ export default function PdfPane(): ReactElement {
   return (
     <div className="pdf-pane">
       <div className="pdf-toolbar">
-        <button onClick={() => setPdfPage(Math.max(1, pdfPage - 1))} disabled={pdfPage <= 1}>
-          上一页
-        </button>
+        <button onClick={() => setPdfPage(Math.max(1, pdfPage - 1))} disabled={pdfPage <= 1}>上一页</button>
         <span className="page-indicator">
           {pdfPage} / {numPages || "?"}
           {pageLabels && pageLabels[pdfPage - 1] ? "（印刷页 " + pageLabels[pdfPage - 1] + "）" : ""}
         </span>
-        <button onClick={() => setPdfPage(Math.min(numPages, pdfPage + 1))} disabled={pdfPage >= numPages}>
-          下一页
-        </button>
+        <button onClick={() => setPdfPage(Math.min(numPages, pdfPage + 1))} disabled={pdfPage >= numPages}>下一页</button>
         <button onClick={() => setScale((s) => Math.max(0.5, s - 0.2))}>－</button>
         <button onClick={() => setScale((s) => Math.min(3, s + 0.2))}>＋</button>
       </div>
@@ -196,21 +197,7 @@ export default function PdfPane(): ReactElement {
               );
             })}
           </div>
-          <div className="highlight-layer">
-            {highlights.map((h, i) => (
-              <div
-                key={i}
-                className={h.pulse ? "highlight pulse" : "highlight"}
-                style={{
-                  left: h.left + "px",
-                  top: h.top + "px",
-                  width: h.width + "px",
-                  height: h.height + "px",
-                  background: h.color,
-                }}
-              />
-            ))}
-          </div>
+          <HighlightLayer rects={highlights} scrollTarget={scrollTarget} />
         </div>
       </div>
     </div>

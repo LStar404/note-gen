@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api/client";
 import { useStore } from "../state/store";
 
+/** Agent 编辑两步式（5.5）：plan → 模态确认 → exec → diff 提示条（可撤销）。 */
 export default function AgentCommandBar() {
   const docId = useStore((s) => s.docId);
   const chapterId = useStore((s) => s.chapterId);
@@ -31,12 +32,8 @@ export default function AgentCommandBar() {
     if (!agent.planId) return;
     setAgent({ running: true, error: null });
     try {
-      const res = await api.agentEdit(url, {
-        mode: "exec",
-        plan_id: agent.planId,
-        confirmed: true,
-      });
-      setAgent({ running: false, diff: res.diff, error: res.error?.error ?? null });
+      const res = await api.agentEdit(url, { mode: "exec", plan_id: agent.planId, confirmed: true });
+      setAgent({ running: false, diff: res.diff, error: res.error?.error ?? null, plan: null, planId: null });
       setToast(res.partial ? "agent 部分执行完成" : "agent 编辑完成");
       await loadBlocks();
     } catch (e: any) {
@@ -51,10 +48,7 @@ export default function AgentCommandBar() {
         const { block, history } = await api.getBlock(item.block_id);
         const prev = history[history.length - 2];
         if (prev) {
-          await api.rollbackBlock(item.block_id, {
-            rev_id: prev.rev_id,
-            expected_revision: block.revision,
-          });
+          await api.rollbackBlock(item.block_id, { rev_id: prev.rev_id, expected_revision: block.revision });
         }
       } catch (e: any) {
         setToast("撤销失败：" + e.message);
@@ -66,47 +60,50 @@ export default function AgentCommandBar() {
   };
 
   return (
-    <div className="agent-bar">
-      <input
-        placeholder="给 agent 的编辑指令（先出计划，确认后执行）"
-        value={instruction}
-        onChange={(e) => setInstruction(e.target.value)}
-      />
-      <button onClick={() => void plan()} disabled={agent.running}>
-        生成计划
-      </button>
+    <>
+      <div className="agent-bar">
+        <input
+          placeholder="给 agent 的编辑指令（先出计划，确认后执行）"
+          value={instruction}
+          onChange={(e) => setInstruction(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && void plan()}
+        />
+        <button onClick={() => void plan()} disabled={agent.running}>生成计划</button>
+        {agent.diff && (
+          <div className="diff-bar">
+            <span>已应用 {agent.diff.applied?.length ?? 0} 个操作</span>
+            <button onClick={() => void undo()}>撤销本次编辑</button>
+          </div>
+        )}
+        {agent.error && <div className="error">{agent.error}</div>}
+      </div>
 
       {agent.plan && (
-        <div className="plan-panel">
-          <div>
-            <b>意图：</b>
-            {agent.plan.intent}
+        <div className="modal-mask" onClick={() => setAgent({ plan: null, planId: null })}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>确认 agent 编辑计划</h2>
+            <p><b>意图：</b>{agent.plan.intent}</p>
+            <p><b>影响块：</b>{(agent.plan.affected_blocks ?? []).join(", ")}</p>
+            <table className="usage-table">
+              <thead>
+                <tr><th>工具</th><th>参数</th><th>说明</th></tr>
+              </thead>
+              <tbody>
+                {(agent.plan.proposed_changes ?? []).map((c: any, i: number) => (
+                  <tr key={i}>
+                    <td>{c.tool}</td>
+                    <td><code>{JSON.stringify(c.args)}</code></td>
+                    <td>{c.message}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="muted">默认不自动执行；确认后仅执行上表已确认的工具参数。</p>
+            <button onClick={() => void exec()} disabled={agent.running}>确认执行</button>
+            <button onClick={() => setAgent({ plan: null, planId: null })}>取消</button>
           </div>
-          <div>
-            <b>影响块：</b>
-            {agent.plan.affected_blocks?.join(", ")}
-          </div>
-          <ul>
-            {(agent.plan.proposed_changes ?? []).map((c: any, i: number) => (
-              <li key={i}>
-                {c.tool} — {c.message || JSON.stringify(c.args)}
-              </li>
-            ))}
-          </ul>
-          <button onClick={() => void exec()} disabled={agent.running}>
-            确认执行
-          </button>
-          <button onClick={() => setAgent({ plan: null, planId: null })}>取消</button>
         </div>
       )}
-
-      {agent.diff && (
-        <div className="diff-bar">
-          <span>已应用 {agent.diff.applied?.length ?? 0} 个操作</span>
-          <button onClick={() => void undo()}>撤销本次编辑</button>
-        </div>
-      )}
-      {agent.error && <div className="error">{agent.error}</div>}
-    </div>
+    </>
   );
 }

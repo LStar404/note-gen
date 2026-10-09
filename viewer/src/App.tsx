@@ -17,18 +17,18 @@ export default function App() {
   const openSettings = useStore((s) => s.openSettings);
   const openReview = useStore((s) => s.openReview);
   const dirtyDraft = useStore((s) => s.dirtyDraft);
-  const setDraft = useStore((s) => s.setDraft);
-  const loadBlocks = useStore((s) => s.loadBlocks);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
+      // j/k/e/s 单键在输入框/输入法组合输入期间不得触发（7.3）
+      const composing = e.isComposing || e.key === "Process" || e.key === "Unidentified";
       const typing =
         !!target &&
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||
           target.isContentEditable ||
-          e.isComposing);
+          composing);
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
@@ -38,6 +38,7 @@ export default function App() {
       if (e.key === "Escape") {
         openSettings(false);
         openReview(false);
+        useStore.getState().setAgent({ plan: null, planId: null });
         return;
       }
       if (typing) return;
@@ -64,6 +65,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [blocks, selectedBlockId, view]);
 
+  // 脏草稿守卫（7.3）：关页前提示
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       if (dirtyDraft !== null) {
@@ -74,17 +76,6 @@ export default function App() {
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirtyDraft]);
-
-  const switchChapter = async (chapterId: string) => {
-    if (dirtyDraft !== null && !window.confirm("当前块有未保存草稿，切换章节将丢弃，继续吗？")) {
-      return;
-    }
-    setDraft(null);
-    await useStore.getState().selectChapter(chapterId);
-    await loadBlocks();
-  };
-
-  void switchChapter; // 供 Toolbar 复用（保留 API）
 
   return (
     <div className="app">

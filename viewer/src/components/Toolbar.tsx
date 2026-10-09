@@ -7,6 +7,8 @@ export default function Toolbar() {
   const docId = useStore((s) => s.docId);
   const manifest = useStore((s) => s.manifest);
   const chapterId = useStore((s) => s.chapterId);
+  const dirtyDraft = useStore((s) => s.dirtyDraft);
+  const setDraft = useStore((s) => s.setDraft);
   const loadDocs = useStore((s) => s.loadDocs);
   const selectDoc = useStore((s) => s.selectDoc);
   const selectChapter = useStore((s) => s.selectChapter);
@@ -18,7 +20,16 @@ export default function Toolbar() {
 
   useEffect(() => {
     void loadDocs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 脏草稿守卫（7.3）：切章/换教材必须提示，不能静默丢弃
+  const guardDirty = (): boolean => {
+    if (dirtyDraft === null) return true;
+    const ok = window.confirm("当前块有未保存草稿，切换将丢弃草稿，继续吗？");
+    if (ok) setDraft(null);
+    return ok;
+  };
 
   const runSearch = async () => {
     if (!docId || !query.trim()) return;
@@ -64,20 +75,28 @@ export default function Toolbar() {
 
   return (
     <header className="toolbar">
-      <select value={docId ?? ""} onChange={(e) => void selectDoc(e.target.value)}>
+      <select
+        value={docId ?? ""}
+        onChange={(e) => {
+          if (!guardDirty()) return;
+          void selectDoc(e.target.value);
+        }}
+      >
         <option value="">— 选择教材 —</option>
         {docs.map((d) => (
-          <option key={d.doc_id} value={d.doc_id}>
-            {d.title}
-          </option>
+          <option key={d.doc_id} value={d.doc_id}>{d.title}</option>
         ))}
       </select>
 
-      <select value={chapterId ?? ""} onChange={(e) => void selectChapter(e.target.value)}>
+      <select
+        value={chapterId ?? ""}
+        onChange={(e) => {
+          if (!guardDirty()) return;
+          void selectChapter(e.target.value);
+        }}
+      >
         {(manifest?.chapters ?? []).map((c: any) => (
-          <option key={c.chapter_id} value={c.chapter_id}>
-            {c.title}
-          </option>
+          <option key={c.chapter_id} value={c.chapter_id}>{c.title}</option>
         ))}
       </select>
 
@@ -106,9 +125,7 @@ export default function Toolbar() {
             <div className="search-group">
               <b>锚点</b>
               {results.anchors.map((a: any) => (
-                <div key={a.anchor_id} className="search-item" onClick={() => void useStore.getState().selectBlock(null)}>
-                  p.{a.page} {a.content.slice(0, 40)}
-                </div>
+                <div key={a.anchor_id} className="search-item">p.{a.page} {a.content.slice(0, 40)}</div>
               ))}
             </div>
             <div className="search-group">

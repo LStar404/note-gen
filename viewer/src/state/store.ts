@@ -3,6 +3,8 @@
 import { create } from "zustand";
 import { api, type DocSummary, type NoteBlock, type Anchor } from "../api/client";
 
+const anchorCache = new Map<string, Anchor>();
+
 export interface AgentState {
   plan: any | null;
   planId: string | null;
@@ -28,7 +30,9 @@ interface Store {
   reviewOpen: boolean;
   reviewItems: NoteBlock[];
   toast: string | null;
+  anchors: Record<string, Anchor>;
 
+  fetchAnchors: (ids: string[]) => Promise<void>;
   loadDocs: () => Promise<void>;
   selectDoc: (docId: string) => Promise<void>;
   selectChapter: (chapterId: string) => Promise<void>;
@@ -62,7 +66,21 @@ export const useStore = create<Store>((set, get) => ({
   reviewOpen: false,
   reviewItems: [],
   toast: null,
+  anchors: {},
 
+  fetchAnchors: async (ids) => {
+    const missing = ids.filter((id) => id && !anchorCache.has(id));
+    await Promise.all(
+      missing.map(async (id) => {
+        try {
+          anchorCache.set(id, await api.getAnchor(id));
+        } catch {
+          /* 锚点缺失时徽标显示占位 */
+        }
+      })
+    );
+    if (missing.length) set({ anchors: Object.fromEntries(anchorCache) });
+  },
   loadDocs: async () => {
     const { docs } = await api.listDocs();
     set({ docs });

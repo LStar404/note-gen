@@ -1,5 +1,9 @@
-import { api, type NoteBlock, type Anchor } from "../api/client";
+import { useEffect } from "react";
+import { api } from "../api/client";
+import { RELATION_CN, STATUS_CN, type NoteBlock } from "../api/types";
 import { useStore } from "../state/store";
+
+export { STATUS_CN };
 
 const TYPE_ICON: Record<string, string> = {
   definition: "📌",
@@ -12,33 +16,26 @@ const TYPE_ICON: Record<string, string> = {
   experiment: "📊",
 };
 
-const RELATION_CN: Record<string, string> = {
-  defines: "定义",
-  states: "陈述",
-  proves: "证明",
-  motivates: "动机",
-  illustrates: "图示",
-  summarizes: "归纳",
-};
-
-export const STATUS_CN: Record<string, string> = {
-  ai_generated: "AI 生成",
-  hybrid: "混合",
-  manually_edited: "人工编辑",
-  needs_review: "待审核",
-};
-
-export default function BlockCard({ block }: { block: NoteBlock }) {
-  const selectBlock = useStore((s) => s.selectBlock);
-  const selectedBlockId = useStore((s) => s.selectedBlockId);
+export default function BlockCard({ block, selected, onSelect }: {
+  block: NoteBlock;
+  selected: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const anchors = useStore((s) => s.anchors);
+  const fetchAnchors = useStore((s) => s.fetchAnchors);
   const setHighlight = useStore((s) => s.setHighlight);
   const setPdfPage = useStore((s) => s.setPdfPage);
   const setToast = useStore((s) => s.setToast);
 
+  useEffect(() => {
+    void fetchAnchors(block.sources.map((s) => s.anchor_id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [block.sources]);
+
   const gotoAnchor = async (anchorId: string) => {
     try {
-      const anchor: Anchor = await api.getAnchor(anchorId);
-      setHighlight(anchor);
+      const anchor = anchors[anchorId] ?? (await api.getAnchor(anchorId));
+      setHighlight(anchor);           // 高亮 + 2 秒脉冲 + 滚动居中（6.2）
       setPdfPage(anchor.page);
     } catch (e: any) {
       setToast("锚点跳转失败：" + e.message);
@@ -46,10 +43,7 @@ export default function BlockCard({ block }: { block: NoteBlock }) {
   };
 
   return (
-    <div
-      className={`block-card ${selectedBlockId === block.id ? "selected" : ""}`}
-      onClick={() => selectBlock(block.id)}
-    >
+    <div className={`block-card ${selected ? "selected" : ""}`} onClick={() => onSelect(block.id)}>
       <div className="block-head">
         <span className="block-type">{TYPE_ICON[block.type] ?? "📝"}</span>
         <span className="block-title">{block.title}</span>
@@ -63,12 +57,13 @@ export default function BlockCard({ block }: { block: NoteBlock }) {
           <button
             key={i}
             className="source-badge"
+            title={s.quote}
             onClick={(e) => {
               e.stopPropagation();
               void gotoAnchor(s.anchor_id);
             }}
           >
-            📖 {RELATION_CN[s.relation] ?? s.relation}
+            {"📖 p." + (anchors[s.anchor_id]?.page ?? "?") + " · " + (RELATION_CN[s.relation] ?? s.relation)}
           </button>
         ))}
       </div>
