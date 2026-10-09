@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type NoteBlock } from "../api/client";
-import { renderMarkdown, renderMathOnly } from "../lib/markdown";
+import { renderMarkdown } from "../lib/markdown";
 import { useStore } from "../state/store";
 
 export default function BlockEditor({ block, mode }: { block: NoteBlock; mode: "source" | "preview" }) {
@@ -46,7 +46,7 @@ export default function BlockEditor({ block, mode }: { block: NoteBlock; mode: "
       <div
         className="block-preview-view"
         dangerouslySetInnerHTML={{
-          __html: renderMathOnly(renderMarkdown(content, docId ?? "", {})),
+          __html: renderMarkdown(content, docId ?? "", {}),
         }}
       />
     );

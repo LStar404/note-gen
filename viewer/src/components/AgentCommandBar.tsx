@@ -37,7 +37,13 @@ export default function AgentCommandBar() {
       setToast(res.partial ? "agent 部分执行完成" : "agent 编辑完成");
       await loadBlocks();
     } catch (e: any) {
-      setAgent({ running: false, error: e.message });
+      const hint =
+        e.code === "BLOCK_LOCKED"
+          ? "目标块为人工编辑块，agent 只读；请先在块详情中解锁后重试"
+          : e.status === 409
+            ? "数据已被修改，请刷新后重试"
+            : e.message;
+      setAgent({ running: false, error: hint });
     }
   };
 
@@ -46,7 +52,11 @@ export default function AgentCommandBar() {
       if (!item.block_id) continue;
       try {
         const { block, history } = await api.getBlock(item.block_id);
-        const prev = history[history.length - 2];
+        const current = Number(block.revision);
+        const prev = history
+          .map((h: any) => ({ ...h, n: Number(String(h.rev_id).split("@r").pop()) }))
+          .filter((h: any) => Number.isFinite(h.n) && h.n < current)
+          .sort((a: any, b: any) => b.n - a.n)[0];
         if (prev) {
           await api.rollbackBlock(item.block_id, { rev_id: prev.rev_id, expected_revision: block.revision });
         }

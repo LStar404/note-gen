@@ -20,15 +20,21 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   }
   const resp = await fetch(url, { method, headers, body: payload });
   if (!resp.ok) {
-    let detail: any = {};
+    let body: any = {};
     try {
-      detail = await resp.json();
+      body = await resp.json();
     } catch {
-      detail = { error: String(resp.status) };
+      body = { error: String(resp.status) };
     }
-    const err = new Error(detail.message || detail.error || "请求失败 " + resp.status);
-    (err as any).code = detail.error;
-    (err as any).detail = detail.detail;
+    // 兼容两种错误形状：{error:"CODE",message,detail} 与 {error:{code,message,details}}
+    const nested = body && typeof body.error === "object" && body.error !== null;
+    const code = nested ? body.error.code : body.error;
+    const message = nested ? body.error.message : body.message;
+    const detail = nested ? body.error.details : body.detail;
+    const fallback = resp.status === 409 ? "数据已被修改，请刷新后重试" : "请求失败 " + resp.status;
+    const err = new Error(message || code || fallback);
+    (err as any).code = code;
+    (err as any).detail = detail;
     (err as any).status = resp.status;
     throw err;
   }

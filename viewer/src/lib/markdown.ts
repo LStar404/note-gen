@@ -1,61 +1,152 @@
-/** 前端预览渲染：markdown-it(html:false) + KaTeX + 图占位符重写（7.4）。 */
+/** 前端预览渲染（规范 7.4 MUST）：
+ *  - markdown-it 关闭原始 HTML（html:false）+ KaTeX 默认安全配置；
+ *  - 图占位符 ![{fig_id}] 在 inline token 阶段识别为专用 figure token（math 规则先注册，
+ *    代码/数学区天然不被改写），渲染为 API URL；
+ *  - 数学 $…$ / $$…$$ 走 KaTeX renderer，不对已渲染 HTML 做正则后处理。
+ */
 
 import MarkdownIt from "markdown-it";
 import katex from "katex";
 
-const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
-
-const FENCE = String.fromCharCode(96, 96, 96);
-const CODE_FENCE = new RegExp(FENCE + ".*?" + FENCE, "gs");
-const MATH = /(\$\$.*?\$\$|\$.*?\$)/gs;
-const FIG = /!\[(fig_\d{8})\]/g;
-
-function protectRegions(text: string): { text: string; kept: string[] } {
-  const kept: string[] = [];
-  const stash = (m: string) => {
-    kept.push(m);
-    return "\u0000" + (kept.length - 1) + "\u0000";
-  };
-  let out = text.replace(CODE_FENCE, stash);
-  out = out.replace(MATH, stash);
-  return { text: out, kept };
+export interface RenderEnv {
+  docId: string;
+  captions?: Record<string, string>;
 }
 
-function restoreRegions(text: string, kept: string[]): string {
-  kept.forEach((raw, i) => {
-    text = text.replace("\u0000" + i + "\u0000", raw);
-  });
-  return text;
+const FIG_RE = /^!\[(fig_\d{8})\]/;
+const MATH_INLINE_RE = /^\$([^$\n]+?)\$/;
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
-/** 图占位符重写为 API URL；代码块/数学区不改写（与导出渲染规则分离）。 */
-export function rewriteFigures(content: string, docId: string, captions: Record<string, string>): string {
-  const { text, kept } = protectRegions(content);
-  const out = text.replace(FIG, (_m, figId: string) =>
-    "![" + (captions[figId] ?? figId) + "](/api/v1/docs/" + docId + "/figures/" + figId + ")"
+function renderMath(tex: string, displayMode: boolean): string {
+  try {
+    return katex.renderToString(tex, {
+      displayMode,
+      throwOnError: false,
+      // 默认安全配置：不信任 \html 等可执行扩展
+      trust: false,
+      strict: "warn",
+    });
+  } catch {
+    return "<code>" + escapeHtml(tex) + "</code>";
+  }
+}
+
+/** 数学规则：块级 $$…$$ 优先于行内 $…$。 */
+function mathPlugin(md: MarkdownIt): void {
+  md.block.ruler.before(
+    "fence",
+    "math_block",
+    (state, startLine, endLine, silent) => {
+      const startPos = state.bMarks[startLine] + state.tShift[startLine];
+      const maxPos = state.eMarks[startLine];
+      const first = state.src.slice(startPos, maxPos).trim();
+      if (!first.startsWith("$$")) return false;
+      if (silent) return true;
+
+      let content = first.slice(2);
+      let lineNo = startLine;
+      if (!(content.endsWith("$$") && content.length >= 2)) {
+        const buf = [content];
+        lineNo = startLine + 1;
+        let closed = false;
+        while (lineNo < endLine) {
+          const s = state.bMarks[lineNo] + state.tShift[lineNo];
+          const e = state.eMarks[lineNo];
+          const text = state.src.slice(s, e);
+          if (text.trim().endsWith("$$")) {
+            buf.push(text.trim().slice(0, -2));
+            closed = true;
+            break;
+          }
+          buf.push(text);
+          lineNo += 1;
+        }
+        if (!closed) return false;
+        content = buf.join("\n");
+      } else {
+        content = content.slice(0, -2);
+      }
+      const token = state.push("math_block", "math", 0);
+      token.content = content;
+      token.map = [startLine, lineNo + 1];
+      state.line = lineNo + 1;
+      return true;
+    },
+    { alt: ["paragraph", "reference", "blockquote", "list"] }
   );
-  return restoreRegions(out, kept);
+
+  md.inline.ruler.after("escape", "math_inline", (state, silent) => {
+    const start = state.pos;
+    if (state.src.charCodeAt(start) !== 0x24 /* $ */) return false;
+    const match = MATH_INLINE_RE.exec(state.src.slice(start));
+    if (!match) return false;
+    if (!silent) {
+      const token = state.push("math_inline", "math", 0);
+      token.content = match[1];
+    }
+    state.pos += match[0].length;
+    return true;
+  });
+
+  md.renderer.rules.math_inline = (tokens, idx) => renderMath(tokens[idx].content, false);
+  md.renderer.rules.math_block = (tokens, idx) =>
+    "<p>" + renderMath(tokens[idx].content, true) + "</p>";
 }
+
+/** 图占位符专用 token：仅在 inline 阶段、非数学/代码区命中。 */
+function figurePlugin(md: MarkdownIt): void {
+  md.inline.ruler.before("image", "figure", (state, silent) => {
+    const match = FIG_RE.exec(state.src.slice(state.pos));
+    if (!match) return false;
+    if (!silent) {
+      const token = state.push("figure", "img", 0);
+      token.meta = { figId: match[1] };
+      token.content = match[1];
+    }
+    state.pos += match[0].length;
+    return true;
+  });
+
+  md.renderer.rules.figure = (tokens, idx, _options, env) => {
+    const { figId } = tokens[idx].meta as { figId: string };
+    const renderEnv = (env ?? {}) as RenderEnv;
+    const caption = renderEnv.captions?.[figId] ?? figId;
+    const docId = renderEnv.docId ?? "";
+    return (
+      '<img src="/api/v1/docs/' +
+      docId +
+      "/figures/" +
+      figId +
+      '" alt="' +
+      escapeHtml(caption) +
+      '">'
+    );
+  };
+}
+
+function createRenderer(): MarkdownIt {
+  const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
+  mathPlugin(md);    // 先注册数学：figure 规则天然跳过数学/代码区
+  figurePlugin(md);
+  return md;
+}
+
+const renderer = createRenderer();
 
 export function renderMarkdown(content: string, docId: string, captions: Record<string, string> = {}): string {
-  const rewritten = rewriteFigures(content, docId, captions);
-  return md.render(rewritten);
+  return renderer.render(content || "", { docId, captions } as RenderEnv);
 }
 
-export function renderMathOnly(html: string): string {
-  return html
-    .replace(/\$\$(.+?)\$\$/gs, (_m, tex: string) => {
-      try {
-        return katex.renderToString(tex, { displayMode: true, throwOnError: false });
-      } catch {
-        return "<pre>" + tex + "</pre>";
-      }
-    })
-    .replace(/(?<!\$)\$([^$\n]+?)\$(?!\$)/g, (_m, tex: string) => {
-      try {
-        return katex.renderToString(tex, { displayMode: false, throwOnError: false });
-      } catch {
-        return "<code>" + tex + "</code>";
-      }
-    });
+/** 图占位符重写（供导出对照逻辑复用）；代码/数学区不改写。 */
+export function rewriteFigures(content: string, docId: string, captions: Record<string, string> = {}): string {
+  return content.replace(/!\[(fig_\d{8})\]/g, (_m, figId: string) =>
+    "![" + (captions[figId] ?? figId) + "](/api/v1/docs/" + docId + "/figures/" + figId + ")"
+  );
 }

@@ -74,7 +74,45 @@ export default function SettingsPanel() {
         ))}
         <button onClick={() => void saveRoutes()}>保存路由</button>
 
+        <h3>导出设置</h3>
+        <div className="route-row">
+          {["md", "tex", "both", "md-obsidian"].map((fmt) => (
+            <button
+              key={fmt}
+              onClick={() => {
+                if (!useStore.getState().docId) return;
+                void api
+                  .exportDoc({ doc_id: useStore.getState().docId, format: fmt })
+                  .then((r) => setToast("导出任务已启动：" + r.task_id))
+                  .catch((e: any) => setToast("导出失败：" + e.message));
+              }}
+            >
+              导出 {fmt}
+            </button>
+          ))}
+        </div>
+
         <h3>供应商</h3>
+        <button
+          onClick={() => {
+            const id = prompt("新供应商 id（如 ollama）");
+            if (!id) return;
+            const base = prompt("base_url", "http://127.0.0.1:11434/v1");
+            if (!base) return;
+            void saveProvider({
+              id,
+              label: id,
+              protocol: "openai_compat",
+              base_url: base,
+              api_key: null,
+              api_key_env: null,
+              capabilities: { json_schema: false, tools: true, vision: false },
+              models: [],
+            });
+          }}
+        >
+          新增供应商
+        </button>
         {(data?.providers ?? []).map((p: any) => (
           <div key={p.id} className="provider-card">
             <div>
@@ -95,6 +133,20 @@ export default function SettingsPanel() {
                 <button onClick={() => void test(p.id, m.id)}>测试连接</button>
               </div>
             ))}
+            <button
+              onClick={() => {
+                if (!window.confirm("删除供应商 " + p.id + "？")) return;
+                void api
+                  .deleteProvider(p.id)
+                  .then(async () => {
+                    setToast("已删除 " + p.id);
+                    setData(await api.models());
+                  })
+                  .catch((e: any) => setToast("删除失败：" + e.message));
+              }}
+            >
+              删除
+            </button>
             <button
               onClick={() => {
                 const base = prompt("base_url", p.base_url);

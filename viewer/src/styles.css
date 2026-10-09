@@ -120,6 +120,18 @@ body { margin: 0; background: #f5f6f8; color: #1f2328; }
 .usage-table th, .usage-table td { border: 1px solid #e2e6ee; padding: 4px 6px; text-align: left; }
 .review-row { border-bottom: 1px solid #eceff3; padding: 8px 0; }
 
+.task-tray {
+  flex-basis: 100%; display: flex; gap: 8px; flex-wrap: wrap;
+  padding: 6px 0 0; font-size: 12px;
+}
+.task-row {
+  display: flex; gap: 6px; align-items: center; background: #eef2ff;
+  border: 1px solid #c7d2fe; border-radius: 999px; padding: 3px 10px;
+}
+.hit-block {
+  display: block; width: 100%; text-align: left; margin-bottom: 6px;
+}
+
 .toast {
   position: fixed; right: 18px; bottom: 18px; background: #111827; color: #fff;
   padding: 10px 14px; border-radius: 8px; font-size: 13px; z-index: 60;

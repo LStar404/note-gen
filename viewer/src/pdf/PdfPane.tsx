@@ -43,6 +43,7 @@ export default function PdfPane(): ReactElement {
   const [textItems, setTextItems] = useState<any[]>([]);
   const [pageLabels, setPageLabels] = useState<string[] | null>(null);
   const [renderKey, setRenderKey] = useState(0);
+  const renderTaskRef = useRef<any>(null);
 
   useEffect(() => {
     if (!docId) return;
@@ -77,6 +78,14 @@ export default function PdfPane(): ReactElement {
     (async () => {
       const page = await doc.getPage(pdfPage);
       if (cancelled) return;
+      // 取消上一次未完成的渲染，避免翻页/缩放并发互相打断
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch {
+          /* 已完成的渲染任务无需取消 */
+        }
+      }
       const viewport = page.getViewport({ scale });
       viewportRef.current = viewport;
       const canvas = canvasRef.current!;
@@ -86,11 +95,17 @@ export default function PdfPane(): ReactElement {
       canvas.height = Math.floor(viewport.height * dpr);
       canvas.style.width = viewport.width + "px";
       canvas.style.height = viewport.height + "px";
-      await page.render({
+      const task = page.render({
         canvasContext: ctx,
         viewport,
         transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
-      }).promise;
+      });
+      renderTaskRef.current = task;
+      try {
+        await task.promise;
+      } catch {
+        return; // 渲染被取消
+      }
       const content = await page.getTextContent();
       if (cancelled) return;
       setTextItems(content.items);
@@ -142,14 +157,21 @@ export default function PdfPane(): ReactElement {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
     const containerRect = container.getBoundingClientRect();
+    // 还原到 viewport CSS 尺度（容器被 CSS 缩放时按比例校正），再转 PDF 用户空间
+    const cssScale = (container.clientWidth || viewport.width) / (viewport.width || 1);
+    const selAny = sel as any;
+    const rawRects: DOMRect[] =
+      typeof selAny.getClientRects === "function"
+        ? Array.from(selAny.getClientRects() as ArrayLike<DOMRect>)
+        : Array.from(sel.getRangeAt(0).getClientRects());
     const rects: Rect[] = [];
-    for (const raw of Array.from(sel.getRangeAt(0).getClientRects())) {
+    for (const raw of rawRects) {
       if (raw.width <= 0 || raw.height <= 0) continue;
       rects.push([
-        raw.left - containerRect.left,
-        raw.top - containerRect.top,
-        raw.right - containerRect.left,
-        raw.bottom - containerRect.top,
+        (raw.left - containerRect.left) / cssScale,
+        (raw.top - containerRect.top) / cssScale,
+        (raw.right - containerRect.left) / cssScale,
+        (raw.bottom - containerRect.top) / cssScale,
       ]);
     }
     if (!rects.length) return;

@@ -2,6 +2,23 @@ import { useStore } from "../state/store";
 import { api } from "../api/client";
 import { STATUS_CN } from "./BlockCard";
 
+async function locateBlock(block: any) {
+  const st = useStore.getState();
+  st.selectBlock(block.id);
+  document.getElementById("block-" + block.id)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  // 对照 sources 原文（7.4 待审核工作流）
+  const first = block.sources?.[0]?.anchor_id;
+  if (first) {
+    try {
+      const anchor = await api.getAnchor(first);
+      st.setHighlight(anchor);
+      st.setPdfPage(anchor.page);
+    } catch {
+      /* 锚点缺失时仅定位块 */
+    }
+  }
+}
+
 export default function ReviewQueue() {
   const open = useStore((s) => s.reviewOpen);
   const items = useStore((s) => s.reviewItems);
@@ -37,7 +54,7 @@ export default function ReviewQueue() {
               <b>{b.title}</b> <span className="muted">{STATUS_CN[b.status]}</span>
             </div>
             <div className="muted">{(b.content ?? "").slice(0, 120)}</div>
-            <button onClick={() => useStore.getState().selectBlock(b.id)}>定位</button>
+            <button onClick={() => void locateBlock(b)}>定位并对照原文</button>
             <button onClick={() => void confirm(b.id, b.revision)}>确认已修</button>
           </div>
         ))}

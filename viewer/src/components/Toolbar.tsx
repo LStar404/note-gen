@@ -17,6 +17,23 @@ export default function Toolbar() {
   const setToast = useStore((s) => s.setToast);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<any | null>(null);
+  const [tasks, setTasks] = useState<any[]>([]);
+
+  // 任务进度/取消（9.2 /tasks/{id}）
+  const track = (taskId: string, kind: string) => {
+    setTasks((list) => [...list, { task_id: taskId, kind, status: "queued", progress: {} }]);
+    const timer = window.setInterval(async () => {
+      try {
+        const t = await api.getTask(taskId);
+        setTasks((list) => list.map((x) => (x.task_id === taskId ? { ...x, ...t } : x)));
+        if (["succeeded", "failed", "partial", "cancelled", "interrupted"].includes(t.status)) {
+          window.clearInterval(timer);
+        }
+      } catch {
+        window.clearInterval(timer);
+      }
+    }, 1000);
+  };
 
   useEffect(() => {
     void loadDocs();
@@ -44,6 +61,7 @@ export default function Toolbar() {
     if (!docId) return;
     try {
       const { task_id } = await api.exportDoc({ doc_id: docId, format });
+      track(task_id, "export");
       setToast("导出任务已启动：" + task_id);
     } catch (e: any) {
       setToast("导出失败：" + e.message);
@@ -54,6 +72,7 @@ export default function Toolbar() {
     if (!docId) return;
     try {
       const { task_id } = await api.generate(docId, { chapter_id: chapterId });
+      track(task_id, "generate");
       setToast("生成任务已启动：" + task_id);
     } catch (e: any) {
       setToast("生成失败：" + e.message);
@@ -66,6 +85,7 @@ export default function Toolbar() {
     form.append("file", file);
     try {
       const resp = await api.post<any>("/api/v1/docs", form);
+      track(resp.task_id, "import");
       setToast("导入任务已启动：" + resp.task_id);
       await loadDocs();
     } catch (e: any) {
@@ -139,6 +159,28 @@ export default function Toolbar() {
           </div>
         )}
       </div>
+
+      {tasks.length > 0 && (
+        <div className="task-tray">
+          {tasks.map((t) => (
+            <div key={t.task_id} className="task-row">
+              <span>
+                {t.kind} · {t.status}
+                {t.progress?.stage ? " · " + t.progress.stage : ""}
+              </span>
+              {["queued", "running"].includes(t.status) && (
+                <button
+                  onClick={() =>
+                    void api.cancelTask(t.task_id).then(() => setToast("已请求取消 " + t.task_id))
+                  }
+                >
+                  取消
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </header>
   );
 }
