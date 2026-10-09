@@ -1,0 +1,28 @@
+app:
+  host: 127.0.0.1          # MUST 本地绑定（NFR-1）
+  port: 8787
+  cors_origins: ["http://127.0.0.1:5173"]   # 开发前端（Vite 默认端口）；生产构建同源后置空
+parser:
+  default: marker          # marker | docling | pypdf
+  ocr_mode: auto          # auto | force | off；按页判断，不按全书无字比例开启
+chapters_override: []     # 手动章区间覆盖优先；空时自动检测
+generate:
+  models:                  # 任务→模型路由（模型名在 data/models.json 注册表解析，可 `provider/model` 全名或唯一短名）
+    default: "openai/gpt-4o-mini" # 示例；必须在注册表中存在；null 槽位回退 default
+    outline: null          # 提纲：便宜快模型（成本控制，5.3）
+    fill: null            # 按评测结果选择，不引用未注册模型
+    agent: null            # agent 编辑：须 tools 能力（9.5.1）
+    link: null             # link 阶段可选补充调用（可关闭）
+  outline_max_in: 32000    # 5.3.2 默认值
+  fill_max_in: 8000
+  concurrency: 2
+  max_cost_per_chapter: 0.0   # 单章成本上限（美元，0=不限；5.3.5）
+  temperature: 0.2          # prompt_version 不在此配置：唯一权威是 prompts.py 顶部常量（5.3.4）
+cache:
+  dir: "cache/gen"
+match:
+  contain_ratio: 0.8       # 6.3 阈值
+  cover_ratio: 0.5
+  top_k: 8
+history:
+  keep_recent: 50          # 4.4.6 保留策略

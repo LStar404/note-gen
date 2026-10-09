@@ -1,0 +1,3 @@
+## {{ icon }} {{ title }}{% for s in sources %} [📖p.{{ s.page }}](note://anchor/{{ s.anchor_id }}?page={{ s.page }}){% endfor %}{% if basis == 'synthesis' %}（AI 归纳）{% endif %}
+
+{{ content }}

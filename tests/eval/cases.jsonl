@@ -1,0 +1,3 @@
+{"case_id":"case-001","doc_id":"sample-la","chapter_id":"ch01","pdf_sha256":"","anchor_id":"__FILLED_AT_RUNTIME__","expected_type":"definition","expected_quote":"The determinant of a matrix","reference_formula":"","dimension":"faithfulness"}
+{"case_id":"case-002","doc_id":"sample-la","chapter_id":"ch01","pdf_sha256":"","anchor_id":"__FILLED_AT_RUNTIME__","expected_type":"theorem","expected_quote":"invertible if and only if","reference_formula":"","dimension":"faithfulness"}
+{"case_id":"case-003","doc_id":"sample-la","chapter_id":"ch02","pdf_sha256":"","anchor_id":"__FILLED_AT_RUNTIME__","expected_type":"definition","expected_quote":"identity matrix","reference_formula":"","dimension":"coverage"}

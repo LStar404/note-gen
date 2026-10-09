@@ -1,0 +1,18 @@
+# 运行数据（事实源中的原 PDF/主数据默认也不入库；备份见 cli.py backup）
+data/
+ingest_out/
+cache/
+reports/
+notes_out/
+logs/
+*.pyc
+__pycache__/
+.pytest_cache/
+node_modules/
+viewer/dist/
+.venv/
+venv/
+*.egg-info/
+.DS_Store
+backups/
+*.zip
