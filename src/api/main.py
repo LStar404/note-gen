@@ -20,13 +20,14 @@ from .state import AppState
 ROOT = Path(os.environ.get("NOTE_GEN_ROOT", Path(__file__).resolve().parents[2]))
 
 
-def create_app(root: str | Path | None = None) -> FastAPI:
+def create_app(root: str | Path | None = None, port: int | None = None) -> FastAPI:
     root = Path(root or ROOT).resolve()
     state = AppState(root)
     app = FastAPI(title="note-gen", version="0.1.0")
     app.state.app_state = state
 
-    cfg_port = int(state.config.get("app", {}).get("port", 8787))
+    # Host/Origin 白名单包含实际监听端口（10.6.5 精确 Host 校验）
+    cfg_port = int(port or state.config.get("app", {}).get("port", 8787))
     allowed_hosts = {f"127.0.0.1:{cfg_port}", f"localhost:{cfg_port}",
                      "127.0.0.1", "localhost"}
     allowed_origins = set(state.config.get("app", {}).get("cors_origins", []) or [])
@@ -84,5 +85,7 @@ def run_server(host: str | None = None, port: int | None = None) -> None:
     import uvicorn
 
     cfg = AppState(ROOT).config.get("app", {})
-    uvicorn.run("src.api.main:app", host=host or cfg.get("host", "127.0.0.1"),
-                port=int(port or cfg.get("port", 8787)), reload=False)
+    listen_port = int(port or cfg.get("port", 8787))
+    uvicorn.run(create_app(ROOT, port=listen_port),
+                host=host or cfg.get("host", "127.0.0.1"),
+                port=listen_port, reload=False)
