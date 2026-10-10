@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { useStore } from "../state/store";
 
@@ -18,6 +18,16 @@ export default function Toolbar() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<any | null>(null);
   const [tasks, setTasks] = useState<any[]>([]);
+  const timersRef = useRef<Set<number>>(new Set());
+
+  // 组件卸载时清掉所有轮询定时器，避免僵尸请求/内存泄漏
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach((t) => window.clearInterval(t));
+      timers.clear();
+    };
+  }, []);
 
   // 任务进度/取消（9.2 /tasks/{id}）
   const track = (taskId: string, kind: string) => {
@@ -28,11 +38,14 @@ export default function Toolbar() {
         setTasks((list) => list.map((x) => (x.task_id === taskId ? { ...x, ...t } : x)));
         if (["succeeded", "failed", "partial", "cancelled", "interrupted"].includes(t.status)) {
           window.clearInterval(timer);
+          timersRef.current.delete(timer);
         }
       } catch {
         window.clearInterval(timer);
+        timersRef.current.delete(timer);
       }
     }, 1000);
+    timersRef.current.add(timer);
   };
 
   useEffect(() => {

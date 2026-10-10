@@ -48,13 +48,25 @@ export default function PdfPane(): ReactElement {
   useEffect(() => {
     if (!docId) return;
     let cancelled = false;
+    // 切换教材/卸载时销毁上一个 PDF 文档，释放 worker 与解析缓存
+    if (docRef.current) {
+      try {
+        docRef.current.destroy();
+      } catch {
+        /* 已销毁 */
+      }
+      docRef.current = null;
+    }
     (async () => {
       const task = pdfjs.getDocument({
         url: api.pdfUrl(docId),
         httpHeaders: { "X-Local-Token": token() },
       });
       const doc = await task.promise;
-      if (cancelled) return;
+      if (cancelled) {
+        doc.destroy();
+        return;
+      }
       docRef.current = doc;
       setNumPages(doc.numPages);
       try {
@@ -67,6 +79,22 @@ export default function PdfPane(): ReactElement {
     })().catch((e: Error) => setToast("PDF 加载失败：" + e.message));
     return () => {
       cancelled = true;
+      // 卸载：取消在途渲染并销毁文档，避免泄漏与卸载后 setState
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch {
+          /* 已完成 */
+        }
+      }
+      if (docRef.current) {
+        try {
+          docRef.current.destroy();
+        } catch {
+          /* 已销毁 */
+        }
+        docRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docId]);

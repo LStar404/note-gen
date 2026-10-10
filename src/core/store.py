@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
-import copy
 import json
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -63,6 +63,7 @@ def sort_blocks(rows: Iterable[dict]) -> list[dict]:
 # 进程级行缓存：key=(root, doc_id) -> (data_revision, {"anchors": {...}, "blocks": {...}})
 # 只缓存"已提交状态"，每次读取先比对 manifest.data_revision，提交即失效（4.2.2 单写者）。
 _ROW_CACHE: dict[tuple[str, str], tuple[int, dict]] = {}
+_ROW_LOCK = threading.Lock()      # 后台任务线程与请求线程共享该缓存
 
 
 class DocStore:
@@ -76,19 +77,22 @@ class DocStore:
 
     def _cached_rows(self, kind: str, chapter_id: str, revision: int, loader):
         """同一 data_revision 内复用解析结果，避免每次请求重复解析 JSONL。"""
-        entry = _ROW_CACHE.get(self._cache_key)
-        if entry is None or entry[0] != revision:
-            entry = (revision, {"anchors": {}, "blocks": {}})
-            _ROW_CACHE[self._cache_key] = entry
-        bucket = entry[1].setdefault(kind, {})
-        if chapter_id not in bucket:
-            bucket[chapter_id] = loader()
-        # 定向克隆：调用方就地修改嵌套字段不得污染缓存
-        return [_clone_row(r) for r in bucket[chapter_id]]
+        with _ROW_LOCK:
+            entry = _ROW_CACHE.get(self._cache_key)
+            if entry is None or entry[0] != revision:
+                entry = (revision, {"anchors": {}, "blocks": {}})
+                _ROW_CACHE[self._cache_key] = entry
+            bucket = entry[1].setdefault(kind, {})
+            if chapter_id not in bucket:
+                bucket[chapter_id] = loader()
+            rows = bucket[chapter_id]
+            # 定向克隆：调用方就地修改嵌套字段不得污染缓存
+            return [_clone_row(r) for r in rows]
 
     @staticmethod
     def _invalidate(layout: Layout, doc_id: str) -> None:
-        _ROW_CACHE.pop((str(layout.root), doc_id), None)
+        with _ROW_LOCK:
+            _ROW_CACHE.pop((str(layout.root), doc_id), None)
 
     # ------------------------------------------------------------------ 读取
     def manifest(self) -> dict:
@@ -143,7 +147,25 @@ class DocStore:
         return rows
 
     def blocks_by_id(self, include_deleted: bool = True) -> dict[str, dict]:
-        return {b["id"]: b for b in self.all_block_rows(include_deleted=include_deleted)}
+        """id → 块 映射；同一 data_revision 内备忘，点查不再每次重建整表。"""
+        rev = self.data_revision()
+        cache_key = ("idmap", "all" if include_deleted else "live")
+        with _ROW_LOCK:
+            entry = _ROW_CACHE.get(self._cache_key)
+            if entry is None or entry[0] != rev:
+                entry = (rev, {"anchors": {}, "blocks": {}, "idmap": {}})
+                _ROW_CACHE[self._cache_key] = entry
+            memo = entry[1].setdefault("idmap", {})
+            if cache_key[1] in memo:
+                return {k: _clone_row(v) for k, v in memo[cache_key[1]].items()}
+        rows = self.all_block_rows(include_deleted=include_deleted)
+        mapping = {b["id"]: b for b in rows}
+        with _ROW_LOCK:
+            entry = _ROW_CACHE.get(self._cache_key)
+            if entry is not None and entry[0] == rev:
+                entry[1].setdefault("idmap", {})[cache_key[1]] = {
+                    k: _clone_row(v) for k, v in mapping.items()}
+        return {k: _clone_row(v) for k, v in mapping.items()}
 
     def get_block(self, block_id: str, include_deleted: bool = True) -> dict:
         block = self.blocks_by_id(include_deleted=include_deleted).get(block_id)

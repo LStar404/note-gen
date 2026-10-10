@@ -109,15 +109,21 @@ def _plan_changes(layout: Layout, doc_id: str, changes: list[FileChange]) -> lis
                 continue
         ch.new_sha256 = sha256_bytes(_resulting_bytes(path, ch))
         if ch.rel_path in seen:
-            # 同一文件多次变更：合并为一条 replace
             idx = seen[ch.rel_path]
             prev = planned[idx]
-            merged = _resulting_bytes(path, ch) if prev.op == "replace" and ch.op == "replace" else None
-            if merged is not None:
+            if prev.op == "replace" and ch.op == "replace":
+                # 同文件多次替换：后写者为准（其候选状态更完整，如 backlink 版）
                 prev.data = ch.data
                 prev.new_sha256 = ch.new_sha256
-                prev.op = "replace"
                 continue
+            if prev.op == "append" and ch.op == "append":
+                # 同文件多次追加必须合并为一次，否则第二次 old_sha 校验会误报 DATA_CORRUPT
+                prev.data = prev.data + ch.data
+                prev.rev_id = prev.rev_id or ch.rev_id
+                prev.new_sha256 = sha256_bytes(_resulting_bytes(path, prev))
+                continue
+            raise DataCorrupt(
+                f"{ch.rel_path}: 同一文件出现冲突的变更类型（{prev.op} / {ch.op}）")
         seen[ch.rel_path] = len(planned)
         planned.append(ch)
     return planned
