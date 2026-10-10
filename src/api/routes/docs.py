@@ -252,10 +252,11 @@ def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
                                             progress=progress, is_cancelled=is_cancelled))
         return {"reports": reports}
 
-    # 防重复触发：同文档同章节已有排队/运行中的生成任务时直接复用（避免重复烧钱）
+    # 防重复触发：同文档已有排队/运行中的生成任务时直接复用（避免重复烧钱）。
+    # 收紧为文档级而非章节级：并发跑两章 = 两个写者抢 data_revision（I7 单写者），
+    # 后提交者必 RevisionConflict，白烧一章的 LLM 费用（probe3 实测两任务并跑）。
     for t in st.runtime.list_tasks(doc_id=doc_id):
-        if (t.get("kind") == "generate" and t.get("status") in ("queued", "running")
-                and (t.get("request") or {}).get("chapter_id") == chapter_id):
+        if t.get("kind") == "generate" and t.get("status") in ("queued", "running"):
             return JSONResponse({"task_id": t["task_id"]}, status_code=202)
 
     task = st.tasks.submit("generate", run, {"doc_id": doc_id, "chapter_id": chapter_id},

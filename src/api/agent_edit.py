@@ -195,6 +195,10 @@ def check_scope(store: DocStore, scope: dict, tool: str, args: dict) -> None:
         if block["chapter_id"] != chapter:
             raise SchemaViolation("update_block 越界：跨章", code="SCOPE_VIOLATION")
     elif tool == "create_block":
+        if scope["kind"] == "block":
+            # 9.4 块级范围=目标块：不得借 create_block 在同章夹带新块
+            raise SchemaViolation("create_block 越界：块级范围只允许修改目标块",
+                                  code="SCOPE_VIOLATION")
         if args.get("chapter_id") != chapter:
             raise SchemaViolation("create_block 越界：只能在目标章创建", code="SCOPE_VIOLATION")
     elif tool == "delete_block":
@@ -209,7 +213,10 @@ def check_scope(store: DocStore, scope: dict, tool: str, args: dict) -> None:
         dst = args.get("to_block_id")
         if scope["kind"] == "block" and src != scope["block_id"]:
             raise SchemaViolation("link_blocks 越界：from_block_id 必须是目标块", code="SCOPE_VIOLATION")
-        store.get_block(src)
+        src_block = store.get_block(src)
+        if src_block["chapter_id"] != chapter:
+            # 章级范围也要挡住跨章 from——否则可借 link 改到别章块的 links
+            raise SchemaViolation("link_blocks 越界：跨章", code="SCOPE_VIOLATION")
         store.get_block(dst)
     else:
         raise SchemaViolation(f"未知工具: {tool}")
@@ -268,8 +275,12 @@ def _extract_tool_calls(resp: dict) -> list[dict]:
             text = obj.strip()
             if text.startswith("```"):                 # 剥掉 markdown 代码围栏再解析
                 text = text.strip("`")
-                if text.lower().startswith(("json", "javascript")):
-                    text = text[4:] if text.lower().startswith("javascript") else text[4:]
+                nl = text.find("\n")
+                tag = text[:nl] if nl >= 0 else text
+                # 语言标签行整体丢弃（json/javascript/js/空），不能截固定长度——
+                # 原实现两种分支都切 4 字符，"javascript" 会剩下 "ascript{..." 导致解析失败
+                if nl >= 0 and tag.strip().lower() in ("json", "javascript", "js", ""):
+                    text = text[nl + 1:]
                 text = text.strip()
             try:
                 obj = json.loads(text)

@@ -8,7 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 
-from src.core.errors import LLMError, RetryableError, SchemaViolation, TaskCancelled
+from src.core.errors import (LLMError, PriceUnknown, RetryableError,
+                             SchemaViolation, TaskCancelled)
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
@@ -112,6 +113,13 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
                 # 配置类错误（NO_MODEL/PRICE_UNKNOWN/模型不存在）继续冒泡，任务要清晰失败。
                 sub.complete = False
                 sub.errors.append(f"batch {bi}: LLM 调用失败: {exc.message}")
+                return sub
+            except PriceUnknown as exc:
+                if exc.code != "BUDGET_EXCEEDED":
+                    raise              # 配置类价格问题 → 任务清晰失败
+                # 预算用尽按批隔离（与 fill 一致）：已产出批次保留，不整章陪葬
+                sub.complete = False
+                sub.errors.append(f"batch {bi}: {exc.message}")
                 return sub
             if resp.get("finish_reason") == "length":
                 # 输出截断不得视作完整提纲：缩批重试（子批前缀带路径后缀，避免 temp_id 撞名）
