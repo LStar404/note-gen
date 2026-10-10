@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 
@@ -24,7 +25,15 @@ ROOT = Path(os.environ.get("NOTE_GEN_ROOT", Path(__file__).resolve().parents[2])
 def create_app(root: str | Path | None = None, port: int | None = None) -> FastAPI:
     root = Path(root or ROOT).resolve()
     state = AppState(root)
-    app = FastAPI(title="note-gen", version="0.1.0")
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # 进程重启恢复（10.4）：把上次进程死掉遗留的 queued/running 任务标为 interrupted。
+        # 只能在服务真正开始服务时执行——构造 AppState 即恢复会误杀并行进程的活任务。
+        state.tasks.interrupt_stale()
+        yield
+
+    app = FastAPI(title="note-gen", version="0.1.0", lifespan=lifespan)
     app.state.app_state = state
 
     # Host/Origin 白名单包含实际监听端口（10.6.5 精确 Host 校验）
@@ -100,7 +109,12 @@ def create_app(root: str | Path | None = None, port: int | None = None) -> FastA
     return app
 
 
-app = create_app()
+def __getattr__(name: str):
+    """惰性暴露 app（PEP 562）：uvicorn src.api.main:app 照常可用，
+    但单纯 import 本模块不再构造真实 AppState（不再有副作用）。"""
+    if name == "app":
+        return create_app()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def run_server(host: str | None = None, port: int | None = None) -> None:

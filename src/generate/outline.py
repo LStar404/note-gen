@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 
-from src.core.errors import SchemaViolation, TaskCancelled
+from src.core.errors import NoteGenError, SchemaViolation, TaskCancelled
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
@@ -98,11 +98,20 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
             attempts += 1
             if is_cancelled and is_cancelled():
                 raise TaskCancelled("任务已取消")
-            resp = client.complete("outline", messages, schema=schema,
-                                   max_tokens=max_out,
-                                   temperature=config.get("generate", {}).get("temperature"),
-                                   model=model, doc_id=doc_id, chapter_id=chapter_id,
-                                   task_id=task_id, budget=budget)
+            try:
+                resp = client.complete("outline", messages, schema=schema,
+                                       max_tokens=max_out,
+                                       temperature=config.get("generate", {}).get("temperature"),
+                                       model=model, doc_id=doc_id, chapter_id=chapter_id,
+                                       task_id=task_id, budget=budget)
+            except TaskCancelled:
+                raise
+            except NoteGenError as exc:
+                # LLM 层失败按批隔离：本批记失败，其余批次照常产出，
+                # outline_complete=False 保住旧块不被 5.7 淘汰
+                sub.complete = False
+                sub.errors.append(f"batch {bi}: LLM 调用失败: {exc.message}")
+                return sub
             if resp.get("finish_reason") == "length":
                 # 输出截断不得视作完整提纲：缩批重试（子批前缀带路径后缀，避免 temp_id 撞名）
                 if len(batch) > 1:

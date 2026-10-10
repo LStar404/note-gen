@@ -25,9 +25,10 @@ DEFAULTS: dict[str, Any] = {
         },
         "outline_max_in": 32000,
         "fill_max_in": 8000,
-        "outline_max_out": 16000,
-        "fill_max_out": 6000,
+        "outline_max_out": 32000,
+        "fill_max_out": 12000,
         "concurrency": 2,
+        "timeout": 600,          # LLM 单次调用超时秒数（推理型模型需更长）
         "max_cost_per_chapter": 0.0,
         "temperature": 0.2,
         "output_language": "zh",      # zh | en | ja  生成笔记与导出标签语言

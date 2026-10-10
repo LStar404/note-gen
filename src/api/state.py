@@ -26,7 +26,10 @@ class AppState:
         from .tasks import TaskManager
 
         self.tasks = TaskManager(self.runtime)
-        self.tasks.interrupt_stale()
+        # 注意：interrupt_stale() 只能在「服务器真正启动」时调用（见 main.py startup 钩子）。
+        # 曾放在 __init__ 里导致任何 AppState 构造（含 pytest import src.api.main 时
+        # 模块级 create_app()）都会把真实 runtime.db 里正在跑的任务打成 interrupted——
+        # 实测一次测试运行直接掐死了用户的生成任务。
 
     def reload_config(self) -> dict:
         self.config = load_config(self.root)

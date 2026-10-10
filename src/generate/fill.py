@@ -7,7 +7,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
-from src.core.errors import SchemaViolation, TaskCancelled
+from src.core.errors import NoteGenError, SchemaViolation, TaskCancelled
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
@@ -78,10 +78,20 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
     max_out = int(config.get("generate", {}).get("fill_max_out", 6000))
     errors: list[str] = []
     for attempt in range(4):           # 首次 + 最多 3 次修复
-        resp = client.complete("fill", messages, schema=schema, max_tokens=max_out,
-                               temperature=config.get("generate", {}).get("temperature"),
-                               model=model, doc_id=doc_id, chapter_id=chapter_id,
-                               task_id=task_id, budget=budget)
+        try:
+            resp = client.complete("fill", messages, schema=schema, max_tokens=max_out,
+                                   temperature=config.get("generate", {}).get("temperature"),
+                                   model=model, doc_id=doc_id, chapter_id=chapter_id,
+                                   task_id=task_id, budget=budget)
+        except TaskCancelled:
+            raise
+        except NoteGenError as exc:
+            # LLM 层失败按块隔离（余额耗尽/超时/超预算）：记失败原因并返回，
+            # 不得冒泡拖垮整章——否则已完成的填充全部丢弃（实测 402 中断丢掉 32 块成果）
+            errors.append(f"LLM 调用失败: {exc.message}")
+            return {"_temp_id": spec["temp_id"], "_status": "failed", "_errors": errors,
+                    "content": "", "content_format": "md_latex", "tags": [],
+                    "sources_patch": spec.get("sources", []), "basis": spec.get("basis", "anchored")}
         try:
             payload = parse_json_output(resp.get("output") if resp.get("output") is not None
                                         else resp.get("raw_text", ""))

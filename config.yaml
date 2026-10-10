@@ -10,13 +10,15 @@ parser:
 chapters_override: []
 generate:
   models:
-    default: deepseek/deepseek-flash
-    outline: deepseek/deepseek-flash
-    fill: deepseek/deepseek-flash
+    default: mimo/mimo-v2.6-flash
+    outline: mimo/mimo-v2.6-flash
+    fill: mimo/mimo-v2.6-flash
     agent: null
     link: null
   outline_max_in: 32000
   fill_max_in: 8000
+  outline_max_out: 16000
+  fill_max_out: 6000
   concurrency: 4
   max_cost_per_chapter: 0.0
   temperature: 0.2

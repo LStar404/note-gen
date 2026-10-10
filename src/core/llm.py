@@ -197,6 +197,9 @@ class LLMClient:
         self.config = config
         self.overrides = overrides or {}
         self._providers: dict[str, LLMProvider] = {}
+        # 单次调用超时（5.3.2 可配置）：推理型模型（MiMo 等）单次可超 2 分钟，
+        # 默认 120s 会被误判超时并白重试（实测 ch08 提纲阶段多次 success=0 空转）
+        self.timeout = float((config.get("generate", {}) or {}).get("timeout", 600.0))
 
     # ---- 路由 ----
     def route(self, task: str) -> str:
@@ -213,7 +216,8 @@ class LLMClient:
             return provider, model, self.overrides[pid]
         if pid not in self._providers:
             self._providers[pid] = OpenAICompatAdapter(
-                pid, provider.get("base_url", ""), self.registry.api_key(provider))
+                pid, provider.get("base_url", ""), self.registry.api_key(provider),
+                timeout=self.timeout)
         return provider, model, self._providers[pid]
 
     # ---- 调用 ----
