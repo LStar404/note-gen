@@ -290,14 +290,16 @@ class DocStore:
         return changes
 
     def integrity_check(self, overrides: dict[str, bytes], *, check_quotes: bool = False,
-                        changed_rows_only: bool = True) -> None:
+                        changed_rows_only: bool = True,
+                        precomputed: tuple[dict, list] | None = None) -> None:
         """I2/I3 与 4.7 校验：候选状态非法则拒绝提交。
 
         changed_rows_only=True：只对本次变更文件里的行做 schema 校验（写入前校验），
         全局引用检查（I2/I3/去重）仍覆盖整个候选状态；
         changed_rows_only=False 供 reindex/校验命令做全量 schema 校验。
         """
-        anchors, blocks = self.candidate_state(overrides)
+        # precomputed：提交路径只构建一次候选状态，校验与反向索引共用
+        anchors, blocks = precomputed if precomputed is not None else self.candidate_state(overrides)
         view_boxes = {p["page"]: p["view_box"] for p in self.manifest().get("pages", [])}
         changed_anchors = self._rows_in_overrides(overrides, "anchors/")
         changed_blocks = self._rows_in_overrides(overrides, "blocks/")
@@ -363,20 +365,27 @@ class DocStore:
                 changes.append(append_change(self.layout, self.doc_id,
                                              f"history/{block_id}.jsonl", todo))
 
+        anchors_override = {f"anchors/{ch}.jsonl": ("".join(dump_line(x) + "\n" for x in rows)).encode("utf-8")
+                            for ch, rows in mutation.anchors.items()}
+        candidates: dict[str, bytes] = dict(anchors_override)
+        for ch, rows in mutation.blocks.items():
+            candidates[f"blocks/{ch}.jsonl"] = ("".join(dump_line(x) + "\n" for x in rows)).encode("utf-8")
+        _, candidate_blocks = self.candidate_state(candidates)
+
         if sync_backlinks:
-            anchors_override = {f"anchors/{ch}.jsonl": ("".join(dump_line(x) + "\n" for x in rows)).encode("utf-8")
-                                for ch, rows in mutation.anchors.items()}
-            candidates: dict[str, bytes] = dict(anchors_override)
-            for ch, rows in mutation.blocks.items():
-                candidates[f"blocks/{ch}.jsonl"] = ("".join(dump_line(x) + "\n" for x in rows)).encode("utf-8")
-            _, candidate_blocks = self.candidate_state(candidates)
             anchor_rows = {ch: list(rows) for ch, rows in mutation.anchors.items()} or None
-            changes.extend(self.backlink_changes(candidate_blocks, anchor_rows))
+            bl_changes = self.backlink_changes(candidate_blocks, anchor_rows)
+            changes.extend(bl_changes)
+            for c in bl_changes:            # 把反向索引更新合入候选，供校验共用
+                candidates[c.rel_path] = c.data
 
         validator = None
         if validate:
+            # 共享候选状态必须在 backlink 合入之后构建，否则 I3 校验会拿旧 note_block_ids 比对
+            precomputed = self.candidate_state(candidates)
+
             def validator(cands: dict[str, bytes]) -> None:  # noqa: F811
-                self.integrity_check(cands, check_quotes=check_quotes)
+                self.integrity_check(cands, check_quotes=check_quotes, precomputed=precomputed)
 
         result = commit_doc(self.layout, self.doc_id, base, changes,
                             manifest_updates=mutation.manifest_updates,

@@ -60,6 +60,27 @@ def test_unknown_parser_rejected():
         get_adapter("unknown-parser")
 
 
+def test_doc_namespace_collision_rejected(tmp_path):
+    """规范 5.2：doc_ns 碰撞必须拒绝导入（真实碰撞对：sha256 前 8 位相同）。"""
+    from src.core.paths import Layout
+    from src.core.text import doc_namespace
+    from src.ingest.parse_pdf import parse_pdf
+    from tests.fixtures.make_sample_pdf import build_sample_pdf
+
+    a, b = "doc-x2935", "doc-x30382"          # 暴力求得的真碰撞对（ns=f96e00f4）
+    assert doc_namespace(a) == doc_namespace(b)
+
+    pdf = build_sample_pdf(tmp_path / "a.pdf")
+    layout = Layout(tmp_path).ensure_base()
+    parse_pdf(pdf, layout.ingest_root, "pypdf", layout=layout, doc_id=a, title="A")
+    with pytest.raises(InputError) as ei:
+        parse_pdf(pdf, layout.ingest_root, "pypdf", layout=layout, doc_id=b, title="B")
+    assert getattr(ei.value, "code", "") == "DOC_NS_COLLISION"
+
+    # 不同命名空间正常导入
+    parse_pdf(pdf, layout.ingest_root, "pypdf", layout=layout, doc_id="doc-unique-1", title="C")
+
+
 def test_fallback_does_not_mask_input_errors(monkeypatch, tmp_path):
     """解析回退只应处理解析器失败；InputError 必须直接报错即止（不得被兜底掩盖）。"""
     import src.ingest.parse_pdf as pp

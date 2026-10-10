@@ -18,7 +18,7 @@ from src.core.errors import InputError, PipelineError
 from src.core.jsonl import atomic_write_bytes, canonical_json, sha256_file
 from src.core.models import Manifest
 from src.core.paths import Layout, rel_to_root
-from src.core.text import utc_now_iso
+from src.core.text import doc_namespace, utc_now_iso
 
 from .chapter_detect import detect_chapters
 from .figure_crop import crop_figure
@@ -344,6 +344,16 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
 
     parser_python = (config or {}).get("parser", {}).get("python")
     adapter = get_adapter(parser, python=parser_python)
+
+    # 5.2：doc_ns 碰撞必须拒绝导入，否则全局点查（anchor_id 前缀）产生歧义
+    ns = doc_namespace(doc_id)
+    for other in layout.data_dir.glob("*/manifest.json"):
+        other_doc = other.parent.name
+        if other_doc != doc_id and doc_namespace(other_doc) == ns:
+            raise InputError(
+                f"doc_id 命名空间冲突：{doc_id} 与已有文档 {other_doc} 的 doc_ns({ns}) 相同，"
+                f"请换一个 doc_id（否则锚点全局点查会歧义）",
+                code="DOC_NS_COLLISION")
     pages_meta_all = [_pdf_page_meta(reader.pages[i]) for i in range(n_pages)]
     bulk = (adapter.parse_document(pdf_path, pages_meta=pages_meta_all)
             if hasattr(adapter, "parse_document") else None)
