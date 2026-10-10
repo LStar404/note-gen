@@ -10,14 +10,14 @@ parser:
 chapters_override: []
 generate:
   models:
-    default: null
-    outline: null
-    fill: null
+    default: deepseek/deepseek-flash
+    outline: deepseek/deepseek-flash
+    fill: deepseek/deepseek-flash
     agent: null
     link: null
   outline_max_in: 32000
   fill_max_in: 8000
-  concurrency: 2
+  concurrency: 4
   max_cost_per_chapter: 0.0
   temperature: 0.2
   output_language: zh

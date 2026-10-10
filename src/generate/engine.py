@@ -174,6 +174,10 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
                         {"candidates": candidates, "outline_complete": outline.complete,
                          "meta": {"prompt_version": PROMPT_VERSION}})
 
+    # 4.6.1 归一（缓存路径同样适用：旧缓存可能带着未归一的重复来源）
+    for c in candidates:
+        c["sources"] = _normalize_sources(c.get("sources"))
+
     candidates = _derive_heading_and_order(candidates, anchors, chapter_id)
     # 失败候选必须交给合并器：保留对应旧块并进报告，不能据此删除（5.7 第 1 条）
     mutation, merge_report = merge_candidates(store, chapter_id, candidates,
