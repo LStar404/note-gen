@@ -90,6 +90,14 @@ def search_anchors(layout: Layout, doc_id: str, query: str, limit: int = 8) -> l
         conn.close()
 
 
+def search_semantic(layout: Layout, doc_id: str, query_vec: list[float], *, k: int = 8,
+                    threshold: float = 0.55) -> list[dict]:
+    """语义兜底（6.3.3）：sqlite-vec Top-K，cosine ≥ threshold；不可用时返回空由 FTS 兜底。"""
+    from src.db.vec import search_vec
+
+    return search_vec(layout, doc_id, query_vec, k=k, threshold=threshold)
+
+
 def match_selection(layout: Layout, doc_id: str, page: int, rects: list[list[float]],
                     text: str, config: dict) -> list[dict]:
     """6.3.2 精确命中算法：cover_anchor≥0.8 或 cover_selection≥0.5；文本辅助。"""

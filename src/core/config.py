@@ -13,7 +13,7 @@ DEFAULTS: dict[str, Any] = {
         "port": 8787,
         "cors_origins": ["http://127.0.0.1:5173"],
     },
-    "parser": {"default": "marker", "ocr_mode": "auto"},
+    "parser": {"default": "marker", "ocr_mode": "auto", "python": None},
     "chapters_override": [],
     "generate": {
         "models": {
@@ -29,6 +29,7 @@ DEFAULTS: dict[str, Any] = {
         "max_cost_per_chapter": 0.0,
         "temperature": 0.2,
     },
+    "embedding": {"provider": "none", "model_dir": None, "dim": 1024, "threshold": 0.55},
     "cache": {"dir": "cache/gen"},
     "match": {"contain_ratio": 0.8, "cover_ratio": 0.5, "top_k": 8},
     "history": {"keep_recent": 50},

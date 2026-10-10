@@ -8,6 +8,7 @@ from pathlib import Path
 from src.core.jsonl import canonical_json
 from src.core.paths import Layout
 from src.core.store import DocStore
+from src.db.vec import DEFAULT_DIM, rebuild_vectors
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -20,8 +21,11 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def reindex_doc(layout: Layout, doc_id: str) -> dict:
-    """锁内从已提交主数据重建派生表，并在同一事务内更新 index_meta。"""
+def reindex_doc(layout: Layout, doc_id: str, vec_dim: int | None = None) -> dict:
+    """锁内从已提交主数据重建派生表，并在同一事务内更新 index_meta。
+
+    同时重建 sqlite-vec 向量表（附录 B vec_anchors）；向量缺失的锚点不入表。
+    """
     store = DocStore(layout, doc_id)
     manifest = store.manifest()
     db_path = layout.index_db(doc_id)
@@ -73,6 +77,13 @@ def reindex_doc(layout: Layout, doc_id: str) -> dict:
                     conn.execute("INSERT OR IGNORE INTO block_links(from_block_id,to_block_id) VALUES(?,?)",
                                  (b["id"], ln))
 
+            # 语义向量层（v2）：从 anchors.embedding 重建
+            dim = vec_dim
+            if dim is None:
+                emb = next((a.get("embedding") for a in anchors if a.get("embedding")), None)
+                dim = len(emb) if emb else DEFAULT_DIM
+            vec_count = rebuild_vectors(conn, anchors, int(dim))
+
             try:
                 conn.execute("INSERT INTO anchors_fts(anchors_fts) VALUES('rebuild')")
             except sqlite3.OperationalError:
@@ -87,7 +98,8 @@ def reindex_doc(layout: Layout, doc_id: str) -> dict:
                          " VALUES(1,?,?)",
                          (int(manifest.get("data_revision", 0)),
                           hashlib.sha256(source_hash.encode("utf-8")).hexdigest()))
-        return {"doc_id": doc_id, "anchors": len(anchors), "blocks": len(blocks)}
+        return {"doc_id": doc_id, "anchors": len(anchors), "blocks": len(blocks),
+                "vectors": vec_count}
     finally:
         conn.close()
 

@@ -1,0 +1,47 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Length 1263 >>
+stream
+BT /F1 10 Tf 60 720 Td (L1 left column text about matrices and vectors.) Tj ET
+BT /F1 10 Tf 330 720 Td (R1 right column text continues the discussion.) Tj ET
+BT /F1 10 Tf 60 690 Td (L2 left column text about matrices and vectors.) Tj ET
+BT /F1 10 Tf 330 690 Td (R2 right column text continues the discussion.) Tj ET
+BT /F1 10 Tf 60 660 Td (L3 left column text about matrices and vectors.) Tj ET
+BT /F1 10 Tf 330 660 Td (R3 right column text continues the discussion.) Tj ET
+BT /F1 10 Tf 60 630 Td (L4 left column text about matrices and vectors.) Tj ET
+BT /F1 10 Tf 330 630 Td (R4 right column text continues the discussion.) Tj ET
+BT /F1 10 Tf 60 600 Td (L5 left column text about matrices and vectors.) Tj ET
+BT /F1 10 Tf 330 600 Td (R5 right column text continues the discussion.) Tj ET
+BT /F1 10 Tf 60 570 Td (L6 left column text about matrices and vectors.) Tj ET
+BT /F1 10 Tf 330 570 Td (R6 right column text continues the discussion.) Tj ET
+BT /F1 10 Tf 60 540 Td (L7 left column text about matrices and vectors.) Tj ET
+BT /F1 10 Tf 330 540 Td (R7 right column text continues the discussion.) Tj ET
+BT /F1 10 Tf 60 510 Td (L8 left column text about matrices and vectors.) Tj ET
+BT /F1 10 Tf 330 510 Td (R8 right column text continues the discussion.) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000185 00000 n 
+0000001500 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1626
+%%EOF

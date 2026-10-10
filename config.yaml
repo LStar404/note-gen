@@ -3,8 +3,9 @@ app:
   port: 8787
   cors_origins: ["http://127.0.0.1:5173"]   # 开发前端（Vite 默认端口）；生产构建同源后置空
 parser:
-  default: marker          # marker | docling | pypdf
+  default: marker          # marker | docling | pypdf（auto 依次尝试可用者）
   ocr_mode: auto          # auto | force | off；按页判断，不按全书无字比例开启
+  python: null            # 解析器 worker 解释器；重型依赖装在 .venv-parsers 时指向其 python.exe
 chapters_override: []     # 手动章区间覆盖优先；空时自动检测
 generate:
   models:                  # 任务→模型路由（模型名在 data/models.json 注册表解析，可 `provider/model` 全名或唯一短名）
@@ -18,6 +19,11 @@ generate:
   concurrency: 2
   max_cost_per_chapter: 0.0   # 单章成本上限（美元，0=不限；5.3.5）
   temperature: 0.2          # prompt_version 不在此配置：唯一权威是 prompts.py 顶部常量（5.3.4）
+embedding:
+  provider: none        # none | onnx_bge | hashed_lexical（后者仅为链路回退，非语义向量）
+  model_dir: null       # onnx_bge 模型目录（需含 model.onnx + tokenizer.json）
+  dim: 1024             # 段落级向量维度（5.2）
+  threshold: 0.55       # 语义检索 cosine 相似度阈值（6.3.3）
 cache:
   dir: "cache/gen"
 match:

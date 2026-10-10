@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,20 @@ from .figure_crop import crop_figure
 from .formula_ocr import FormulaOCR
 
 PAGE_JSON_VERSION = "1"
+
+
+def _pdf_page_meta(page) -> dict:
+    """manifest.pages 的几何元数据直接取自 PDF（4.3）：view_box/user_unit/rotation。"""
+
+    def box(b):
+        return [float(b.left), float(b.bottom), float(b.right), float(b.top)]
+
+    view = box(page.cropbox) if page.cropbox is not None else box(page.mediabox)
+    return {
+        "view_box": view,
+        "user_unit": float(page.get("/UserUnit", 1.0) or 1.0),
+        "rotation": int(page.rotation or 0) % 360,
+    }
 
 
 class ParserAdapter:
@@ -60,12 +75,43 @@ class PypdfAdapter(ParserAdapter):
         page = reader.pages[page_index]
         meta = self.page_meta(page)
         spans: list[dict] = []
+        state = {"tm": (1.0, 0.0, 0.0, 1.0, 0.0, 0.0), "tl": 0.0}
+
+        def mat_mul(m1, m2):
+            a1, b1, c1, d1, e1, f1 = m1
+            a2, b2, c2, d2, e2, f2 = m2
+            return (a1 * a2 + c1 * b2, b1 * a2 + d1 * b2,
+                    a1 * c2 + c1 * d2, b1 * c2 + d1 * d2,
+                    a1 * e2 + c1 * f2 + e1, b1 * e2 + d1 * f2 + f1)
+
+        def operand_after(op, operands, cm, tm):
+            """自行跟踪文本矩阵：pypdf 的 visitor_text 回传 tm 时有滞后（Td/Tm 之后才更新）。"""
+            name = op.decode("latin-1") if isinstance(op, (bytes, bytearray)) else str(op)
+            try:
+                if name == "BT":
+                    state["tm"] = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)   # 文本对象开始即重置
+                    state["tl"] = 0.0
+                elif name == "Tm" and len(operands) == 6:
+                    state["tm"] = tuple(float(x) for x in operands)
+                elif name == "Td" and len(operands) == 2:
+                    state["tm"] = mat_mul(state["tm"], (1.0, 0.0, 0.0, 1.0,
+                                                        float(operands[0]), float(operands[1])))
+                elif name == "TD" and len(operands) == 2:
+                    state["tl"] = -float(operands[1])
+                    state["tm"] = mat_mul(state["tm"], (1.0, 0.0, 0.0, 1.0,
+                                                        float(operands[0]), float(operands[1])))
+                elif name == "TL" and len(operands) == 1:
+                    state["tl"] = float(operands[0])
+                elif name == "T*":
+                    state["tm"] = mat_mul(state["tm"], (1.0, 0.0, 0.0, 1.0, 0.0, -state["tl"]))
+            except Exception:
+                pass
 
         def visitor(text, cm, tm, font_dict, font_size):
             if not text or not text.strip():
                 return
             a1, b1, c1, d1, e1, f1 = cm
-            a2, b2, c2, d2, e2, f2 = tm
+            a2, b2, c2, d2, e2, f2 = state["tm"]
             x = a1 * e2 + c1 * f2 + e1
             y = b1 * e2 + d1 * f2 + f1
             size = float(font_size or 10.0)
@@ -77,7 +123,7 @@ class PypdfAdapter(ParserAdapter):
             })
 
         try:
-            page.extract_text(visitor_text=visitor)
+            page.extract_text(visitor_text=visitor, visitor_operand_after=operand_after)
         except Exception as exc:
             return {"status": "failed", "error": str(exc), "blocks": [], "meta": meta}
 
@@ -122,52 +168,89 @@ def _spans_to_blocks(spans: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Marker / Docling 适配器（默认候选，需安装对应依赖；见 5.1 选型表）
+# Marker / Docling 适配器（默认候选，见 5.1 选型表）：经 parser_workers 子进程运行重型依赖
 # ---------------------------------------------------------------------------
-class MarkerAdapter(PypdfAdapter):
-    name = "marker"
-    version = "unknown"
+class WorkerAdapter(ParserAdapter):
+    """在独立解释器（默认 .venv-parsers）中运行的解析器适配器（ADR D31）。"""
 
-    def __init__(self):
+    def __init__(self, name: str, python: str | None = None):
+        self.name = name
+        self.python = python
+        info = self._call("probe", {})
+        modules = info.get("modules", {}) if isinstance(info, dict) else {}
+        if not modules.get(self.name):
+            raise InputError(
+                f"解析器 {self.name} 不可用：请安装（python -m pip install {self.name}-pdf 等）"
+                f"或使用 --parser pypdf",
+                detail={"probe": modules})
+        self.version = str(modules.get(self.name))
+
+    @staticmethod
+    def _resolve_python(explicit: str | None) -> str:
+        """worker 解释器：显式配置 > .venv-parsers > 当前解释器（ADR D31）。"""
+        import sys
+
+        if explicit:
+            return explicit
+        root = Path(__file__).resolve().parents[2]
+        for cand in (root / ".venv-parsers" / "Scripts" / "python.exe",
+                     root / ".venv-parsers" / "bin" / "python"):
+            if cand.exists():
+                return str(cand)
+        return sys.executable
+
+    def _call(self, mode: str, payload: dict) -> dict:
+        import subprocess
+
+        worker = Path(__file__).resolve().parent / "parser_workers.py"
+        python = self._resolve_python(self.python)
+        proc = subprocess.run([python, str(worker), mode],
+                              input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                              capture_output=True, cwd=str(Path(__file__).resolve().parents[2]),
+                              timeout=1800)
+        if proc.returncode != 0:
+            raise PipelineError(f"{self.name} worker 退出码 {proc.returncode}: "
+                                f"{proc.stderr.decode('utf-8', 'ignore')[-500:]}")
         try:
-            import marker  # noqa: F401
+            return json.loads(proc.stdout.decode("utf-8"))
         except Exception as exc:
-            raise InputError("未安装 marker-pdf，无法使用 --parser marker（可改用 pypdf 或安装 [marker] 额外依赖）",
-                             detail={"error": str(exc)})
-        super().__init__()
-        import marker as _marker
+            raise PipelineError(f"{self.name} worker 输出非法 JSON: {exc}")
 
-        self.version = getattr(_marker, "__version__", "unknown")
+    def parse_document(self, pdf_path: str | Path, pages_meta: list[dict] | None = None) -> dict:
+        """整书解析：返回 {pages:[...], coordinate:{...}, warnings:[...]}。"""
+        out = self._call(self.name, {"pdf_path": str(Path(pdf_path).resolve()),
+                                    "pages_meta": pages_meta or []})
+        if not out.get("ok"):
+            raise PipelineError(f"{self.name} 解析失败: {out.get('error')}")
+        return out
 
-
-class DoclingAdapter(PypdfAdapter):
-    name = "docling"
-
-    def __init__(self):
-        try:
-            import docling  # noqa: F401
-        except Exception as exc:
-            raise InputError("未安装 docling，无法使用 --parser docling（可改用 pypdf 或安装 [docling] 额外依赖）",
-                             detail={"error": str(exc)})
-        super().__init__()
-        import docling as _docling
-
-        self.version = getattr(_docling, "__version__", "unknown")
+    def parse_page(self, reader, page_index: int) -> dict:  # pragma: no cover - 整书路径覆盖
+        raise PipelineError(f"{self.name} 走整书解析路径")
 
 
-def get_adapter(name: str) -> ParserAdapter:
+class MarkerAdapter(WorkerAdapter):
+    def __init__(self, python: str | None = None):
+        super().__init__("marker", python=python)
+
+
+class DoclingAdapter(WorkerAdapter):
+    def __init__(self, python: str | None = None):
+        super().__init__("docling", python=python)
+
+
+def get_adapter(name: str, *, python: str | None = None) -> ParserAdapter:
     name = (name or "auto").lower()
     if name == "marker":
-        return MarkerAdapter()
+        return MarkerAdapter(python=python)
     if name == "docling":
-        return DoclingAdapter()
+        return DoclingAdapter(python=python)
     if name == "pypdf":
         return PypdfAdapter()
     if name == "auto":
         for factory in (MarkerAdapter, DoclingAdapter):
             try:
-                return factory()
-            except InputError:
+                return factory(python=python)
+            except (InputError, PipelineError):
                 continue
         return PypdfAdapter()
     raise InputError(f"未知解析器: {name}")
@@ -194,7 +277,14 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
     if n_pages == 0:
         raise InputError("PDF 没有任何页面")
 
-    adapter = get_adapter(parser)
+    parser_python = (config or {}).get("parser", {}).get("python")
+    adapter = get_adapter(parser, python=parser_python)
+    pages_meta_all = [_pdf_page_meta(reader.pages[i]) for i in range(n_pages)]
+    bulk = (adapter.parse_document(pdf_path, pages_meta=pages_meta_all)
+            if hasattr(adapter, "parse_document") else None)
+    if bulk:
+        for warn in bulk.get("warnings", []):
+            print(f"[ingest] {adapter.name}: {warn}", file=sys.stderr)
     doc_id = doc_id or ("doc-" + sha256_file(pdf_path)[:12])
     pages_dir = out_dir / doc_id / "pages"
     if pages_dir.exists():
@@ -207,8 +297,22 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
     figure_seq = 0
 
     for i in range(n_pages):
-        result = adapter.parse_page(reader, i)
-        meta = result.get("meta", {"view_box": [0, 0, 612, 792], "user_unit": 1.0, "rotation": 0})
+        meta = _pdf_page_meta(reader.pages[i])
+        if bulk is not None:
+            page_data = (bulk.get("pages") or [])[i] if i < len(bulk.get("pages") or []) else {}
+            coord = bulk.get("coordinate", {})
+            result = {
+                "status": page_data.get("status", "failed"),
+                "blocks": page_data.get("blocks", []),
+                "meta": meta,
+                "source_space": coord.get("source_space", "pdf_user_space"),
+                "source_to_pdf": coord.get("source_to_pdf", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+                "coordinate_derivation": coord.get("derivation", ""),
+                "error": page_data.get("error"),
+            }
+        else:
+            result = adapter.parse_page(reader, i)
+            result.setdefault("meta", meta)
         view_box = meta["view_box"]
         blocks = result.get("blocks", [])
         source_to_pdf = result.get("source_to_pdf", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0])

@@ -76,11 +76,12 @@ def trigger_export(request: Request, body: dict):
     doc_id = body.get("doc_id")
     chapter_id = body.get("chapter_id")
     fmt = body.get("format", "md")
-    if fmt not in ("md", "tex", "both", "md-obsidian"):
+    if fmt not in ("md", "tex", "both", "md-obsidian", "anki"):
         raise InputError(f"不支持的导出格式: {fmt}")
 
     def run(req, progress, is_cancelled, register_artifact):
         from src.core.store import DocStore
+        from src.export.anki_export import export_anki
         from src.export.md_export import export_md_book, export_md_chapter, export_md_obsidian
         from src.export.tex_export import export_tex_book, export_tex_chapter
 
@@ -96,11 +97,15 @@ def trigger_export(request: Request, body: dict):
                 paths.append(str(export_tex_chapter(store, ch, out_dir=out_dir)))
             if fmt == "md-obsidian":
                 paths.append(str(export_md_obsidian(store, ch, out_dir=out_dir.parent)))
+            if fmt == "anki":
+                paths.append(str(export_anki(store, ch, out_dir=out_dir)))
         if chapter_id is None:
             if fmt in ("md", "both"):
                 paths.append(str(export_md_book(store, out_dir=out_dir)))
             if fmt in ("tex", "both"):
                 paths.append(str(export_tex_book(store, out_dir=out_dir)))
+            if fmt == "anki":
+                paths.append(str(export_anki(store, None, out_dir=out_dir)))
         for p in paths:
             register_artifact(Path(p).name, p)
         return {"paths": paths}

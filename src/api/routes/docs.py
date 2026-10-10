@@ -153,16 +153,31 @@ def match_selection(request: Request, doc_id: str, body: dict):
 
 @router.get("/api/v1/search")
 def search(request: Request, doc_id: str, q: str, mode: str = "fts"):
+    """检索（6.3）：mode=vec 走 sqlite-vec 语义兜底，未命中自动回落 FTS。"""
     st = state(request)
     store = DocStore(st.layout, doc_id)
-    anchors = queries.search_anchors(st.layout, doc_id, q, limit=int(st.config.get("match", {}).get("top_k", 8)))
+    top_k = int(st.config.get("match", {}).get("top_k", 8))
+    anchors: list[dict] = []
+    if mode == "vec":
+        from src.anchor.embed import embedder_from_config
+
+        embedder = embedder_from_config(st.config)
+        vec = (embedder.encode([q]) or [None])[0]
+        if vec:
+            anchors = queries.search_semantic(
+                st.layout, doc_id, vec, k=top_k,
+                threshold=float(st.config.get("embedding", {}).get("threshold", 0.55)))
+    if not anchors:
+        anchors = queries.search_anchors(st.layout, doc_id, q, limit=top_k)
     blocks = [b for b in store.all_block_rows()
               if q.lower() in (b.get("title", "") + b.get("content", "")).lower()][:8]
     return {
         "anchors": [{"anchor_id": a["anchor_id"], "page": a["page"], "content": a["content"],
-                     "note_block_ids": a.get("note_block_ids", [])} for a in anchors],
+                     "note_block_ids": a.get("note_block_ids", []), "match": a.get("match", "fts")}
+                    for a in anchors],
         "blocks": [{"block_id": b["id"], "type": b["type"], "title": b["title"],
                     "summary": (b.get("content") or "")[:120], "status": b["status"]} for b in blocks],
+        "mode": mode,
     }
 
 

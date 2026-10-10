@@ -1,0 +1,10 @@
+{
+  "case-001": {
+    "faithfulness": 1,
+    "formula": 1,
+    "coverage": 1
+  },
+  "case-002": {
+    "faithfulness": 1
+  }
+}

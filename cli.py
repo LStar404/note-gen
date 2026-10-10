@@ -116,6 +116,7 @@ def cmd_export(args) -> int:
     if args.dry_run:
         print(f"[dry-run] export {args.doc_id} format={args.format}")
         return 0
+    from src.export.anki_export import export_anki
     from src.export.md_export import export_md_book, export_md_chapter, export_md_obsidian
     from src.export.tex_export import export_tex_book, export_tex_chapter
 
@@ -131,7 +132,11 @@ def cmd_export(args) -> int:
             paths.append(export_tex_chapter(store, ch, out_dir=out_dir))
         if args.format == "md-obsidian":
             paths.append(export_md_obsidian(store, ch, out_dir=out_dir.parent))
+        if args.format == "anki":
+            paths.append(export_anki(store, ch, out_dir=out_dir))
     if not args.chapter:
+        if args.format == "anki":
+            paths.append(export_anki(store, None, out_dir=out_dir))
         if args.format in ("md", "both"):
             paths.append(export_md_book(store, out_dir=out_dir))
         if args.format in ("tex", "both"):
@@ -201,10 +206,41 @@ def cmd_reindex(args) -> int:
 
     layout = _layout()
     if args.dry_run:
-        print(f"[dry-run] reindex {args.doc_id}")
+        print(f"[dry-run] reindex {args.doc_id} embed={args.embed}")
         return 0
+    if args.embed:
+        n = embed_anchors(layout, args.doc_id)
+        print(json.dumps({"embedded": n}, ensure_ascii=False))
     print(json.dumps(reindex_doc(layout, args.doc_id), ensure_ascii=False))
     return 0
+
+
+def embed_anchors(layout: Layout, doc_id: str) -> int:
+    """为缺失 embedding 的锚点计算段落级向量（5.2 第三层）。"""
+    from src.anchor.embed import embedder_from_config
+    from src.core.config import load_config
+    from src.core.store import DocMutation, DocStore
+
+    embedder = embedder_from_config(load_config(ROOT))
+    if not embedder.enabled:
+        raise InputError("未启用 embedding：请设置 config.yaml embedding.provider=onnx_bge 或 hashed_lexical")
+    store = DocStore(layout, doc_id)
+    updates: dict = {}
+    count = 0
+    for ch in store.chapter_ids():
+        rows = [dict(r) for r in store.anchor_rows(ch)]
+        missing = [r for r in rows if not r.get("embedding")]
+        if not missing:
+            continue
+        vecs = embedder.encode([r["content"] for r in missing])
+        for row, vec in zip(missing, vecs):
+            if vec:
+                row["embedding"] = vec
+                count += 1
+        updates[ch] = rows
+    if updates:
+        store.commit(DocMutation(anchors=updates), sync_backlinks=True)
+    return count
 
 
 def cmd_report(args) -> int:
@@ -234,40 +270,25 @@ def cmd_report(args) -> int:
 
 
 def cmd_eval(args) -> int:
-    """跑生成质量评测集（10.5）：结构指标 + 与基线对比。"""
+    """跑生成质量评测集（10.5）：三维度评分 + 基线回归告警。"""
+    from src.eval.runner import run_eval
+
     layout = _layout()
-    cases_path = ROOT / "tests" / "eval" / "cases.jsonl"
-    if not cases_path.exists():
-        print(json.dumps({"error": "缺少 tests/eval/cases.jsonl"}))
-        return 2
-    cases = load_jsonl(cases_path)
-    store = DocStore(layout, args.doc_id)
-    anchors = store.anchors_by_id()
-    blocks = store.all_block_rows()
-    total = len(cases) or 1
-    hit_source = 0
-    hit_quote = 0
-    for case in cases:
-        anchor = anchors.get(case.get("anchor_id"))
-        if anchor is None:
-            continue
-        hit_source += 1
-        for b in blocks:
-            for src in b.get("sources", []):
-                if src["anchor_id"] == case.get("anchor_id") and case.get("expected_quote", "") in src.get("quote", ""):
-                    hit_quote += 1
-                    break
-    result = {"doc_id": args.doc_id, "cases": len(cases),
-              "source_exists_rate": hit_source / total,
-              "quote_match_rate": hit_quote / total}
+    cases_path = Path(args.cases) if args.cases else ROOT / "tests" / "eval" / "cases.jsonl"
+    labels_path = ROOT / "tests" / "eval" / "labels.json"
     baseline_path = ROOT / "reports" / "eval_baseline.json"
-    if baseline_path.exists():
-        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
-        result["baseline"] = baseline
-        result["regressions"] = [
-            k for k in ("source_exists_rate", "quote_match_rate")
-            if k in baseline and result[k] < baseline[k] - 0.05]
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    result = run_eval(layout, args.doc_id, cases_path=cases_path, labels_path=labels_path,
+                      baseline_path=baseline_path, update_baseline=args.update_baseline)
+    out = layout.reports_doc_dir(args.doc_id) / "eval.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    summary = {k: result[k] for k in
+               ("doc_id", "cases", "human_labelled", "dimensions", "baseline",
+                "regressions", "baseline_written") if k in result}
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if result.get("regressions"):
+        print("回归告警：以下维度低于基线 5 个百分点（10.5）", file=sys.stderr)
+        return 2
     return 0
 
 
@@ -398,7 +419,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("export"); common(sp)
     sp.add_argument("doc_id"); sp.add_argument("--chapter")
-    sp.add_argument("--format", default="md", choices=["md", "tex", "both", "md-obsidian"])
+    sp.add_argument("--format", default="md", choices=["md", "tex", "both", "md-obsidian", "anki"])
     sp.add_argument("--out")
     sp.set_defaults(func=cmd_export)
 
@@ -407,7 +428,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--profile", default="textbook", choices=["textbook", "paper"])
     sp.add_argument("--parser", default="auto", choices=["auto", "marker", "docling", "pypdf"])
     sp.add_argument("--chapter"); sp.add_argument("--model")
-    sp.add_argument("--format", default="md", choices=["md", "tex", "both", "md-obsidian"])
+    sp.add_argument("--format", default="md", choices=["md", "tex", "both", "md-obsidian", "anki"])
     sp.add_argument("--ocr", action="store_true"); sp.add_argument("--force", action="store_true")
     sp.add_argument("--concurrency", type=int, default=0); sp.add_argument("--no-cache", action="store_true")
     sp.add_argument("--merge", action="store_true", default=True)
@@ -415,12 +436,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_run)
 
     sp = sub.add_parser("reindex"); common(sp); sp.add_argument("doc_id")
+    sp.add_argument("--embed", action="store_true", help="先为缺失向量的锚点计算 embedding")
     sp.set_defaults(func=cmd_reindex)
 
     sp = sub.add_parser("report"); common(sp); sp.add_argument("doc_id")
     sp.set_defaults(func=cmd_report)
 
     sp = sub.add_parser("eval"); common(sp); sp.add_argument("doc_id")
+    sp.add_argument("--cases", help="评测集路径（默认 tests/eval/cases.jsonl）")
+    sp.add_argument("--update-baseline", action="store_true", help="固化/更新基线 reports/eval_baseline.json")
     sp.set_defaults(func=cmd_eval)
 
     sp = sub.add_parser("backup"); common(sp); sp.add_argument("doc_id"); sp.add_argument("--out")

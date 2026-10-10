@@ -8,3 +8,7 @@
 | D28 | core 增加 `errors.py`/`paths.py`/`config.py`/`store.py` 辅助模块 | 10.1 列出的模块是必须落位项，不禁止实现辅助模块；store 统一封装 4.2.2 提交入口，避免各层重复实现提交协议 | 实现级 |
 | D29 | 图像裁剪支持 pymupdf → pdfplumber → PIL 占位图三级降级，并在报告中标注 | 无渲染器时仍产出合法 Figure 记录，避免 figure 块断链；占位图带图注文本，报告可审计 | 实现级 |
 | D30 | 生成阶段合并逻辑实现为 `src/generate/merge.py`（10.1 未列出但 5.7 要求） | 5.7 合并策略为红线需求，需要独立模块与测试 | 实现级 |
+| D31 | Marker/Docling/Pix2Text 经 `src/ingest/parser_workers.py` 子进程适配器运行（默认 `.venv-parsers` 独立解释器，`config.yaml parser.python` 可改） | 重型依赖（torch/transformers）与主环境隔离，避免破坏 FastAPI/Pydantic 版本组合；worker 只走 JSON stdio，缺元数据时该页 failed 不猜 scale/rotation | 实现级 |
+| D32 | marker 2.x 块 bbox 采用"页面包围盒自标定"换算（scale_x/scale_y + y 轴翻转） | marker 各版本 bbox 空间不统一（0-1 归一化/像素/点），不能硬编码一套公式；自标定参数记入 `coordinate_meta.derivation` 供审计 | 实现级 |
+| D33 | embedding 三档 provider：none（默认）/onnx_bge（真语义）/hashed_lexical（明确标注的词法回退） | 语义向量需要 bge ONNX 模型（不随仓库分发）；hashed_lexical 仅用于打通 sqlite-vec 链路并在文档中声明非语义 | v2 |
+| D34 | Anki 导出 `.apkg`（genanki）+ CSV 回退；eval 三维度评分与基线回归告警 | 对应 11.4/10.5 交付项；卡片与 deck ID 确定性派生，重复导入即更新 | v2 |
