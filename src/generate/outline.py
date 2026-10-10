@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 
-from src.core.errors import NoteGenError, SchemaViolation, TaskCancelled
+from src.core.errors import LLMError, RetryableError, SchemaViolation, TaskCancelled
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
@@ -106,9 +106,10 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
                                        task_id=task_id, budget=budget)
             except TaskCancelled:
                 raise
-            except NoteGenError as exc:
-                # LLM 层失败按批隔离：本批记失败，其余批次照常产出，
-                # outline_complete=False 保住旧块不被 5.7 淘汰
+            except (LLMError, RetryableError) as exc:
+                # LLM 调用层失败按批隔离：本批记失败，其余批次照常产出，
+                # outline_complete=False 保住旧块不被 5.7 淘汰。
+                # 配置类错误（NO_MODEL/PRICE_UNKNOWN/模型不存在）继续冒泡，任务要清晰失败。
                 sub.complete = False
                 sub.errors.append(f"batch {bi}: LLM 调用失败: {exc.message}")
                 return sub

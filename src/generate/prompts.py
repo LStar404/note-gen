@@ -45,7 +45,8 @@ FILL_PROMPT = """下面是笔记块 {block_type}「{title}」的定义及其来�
 AGENT_SYSTEM_PROMPT = SYSTEM_PROMPT + """
 
 你是笔记编辑 agent。用户会给出编辑指令。流程：
-1. 先输出 plan（intent/affected_blocks/proposed_changes），等待用户确认；
+1. 先通过**工具调用**（tool_calls）提出修改计划——每个工具调用即一项修改，
+   不要用 JSON 文本或 markdown 代码块代替工具调用；等待用户确认；
 2. 确认后仅执行计划绑定的工具参数；每次工具调用附 message 说明；
 3. 参数在 plan 阶段根据错误 hint 修正最多 2 次，确认绑定最终参数；exec 发生冲突则停止并重新规划，不能自行修改已确认操作；
 4. manually_edited 块默认只读；仅用户对本 plan_id+block_id 显式解锁后可编辑，generation_protected 不因此取消。

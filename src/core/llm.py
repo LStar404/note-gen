@@ -179,7 +179,10 @@ class BudgetGuard:
             raise PriceUnknown("成本未知，无法在非零预算下调用")
         with self._lock:
             if self._reserved + cost_estimate > self.limit:
+                # code=BUDGET_EXCEEDED：运行期预算用尽，与配置类 PriceUnknown 区分——
+                # 前者按块隔离保住已完成成果，后者（NO_MODEL/PRICE_UNKNOWN）必须冒泡
                 raise PriceUnknown("超出单章成本上限 max_cost_per_chapter",
+                                   code="BUDGET_EXCEEDED",
                                    detail={"limit": self.limit, "reserved": self._reserved})
             self._reserved += cost_estimate
 

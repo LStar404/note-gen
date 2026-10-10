@@ -7,7 +7,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
-from src.core.errors import NoteGenError, SchemaViolation, TaskCancelled
+from src.core.errors import (LLMError, PriceUnknown, RetryableError,
+                             SchemaViolation, TaskCancelled)
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
@@ -85,9 +86,19 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
                                    task_id=task_id, budget=budget)
         except TaskCancelled:
             raise
-        except NoteGenError as exc:
-            # LLM 层失败按块隔离（余额耗尽/超时/超预算）：记失败原因并返回，
-            # 不得冒泡拖垮整章——否则已完成的填充全部丢弃（实测 402 中断丢掉 32 块成果）
+        except (LLMError, RetryableError) as exc:
+            # LLM 调用层失败按块隔离（余额耗尽/超时/限流）：记失败原因并返回，
+            # 不得冒泡拖垮整章——否则已完成的填充全部丢弃（实测 402 中断丢掉 32 块成果）。
+            # 注意：配置类错误（未配置模型/价格未知/模型不存在）不属于此类，必须冒泡，
+            # 否则任务会「成功」而全部块悄悄失败（probe 实测过这种假成功）。
+            errors.append(f"LLM 调用失败: {exc.message}")
+            return {"_temp_id": spec["temp_id"], "_status": "failed", "_errors": errors,
+                    "content": "", "content_format": "md_latex", "tags": [],
+                    "sources_patch": spec.get("sources", []), "basis": spec.get("basis", "anchored")}
+        except PriceUnknown as exc:
+            if exc.code != "BUDGET_EXCEEDED":
+                raise                     # 配置类价格问题 → 任务清晰失败
+            # 预算用尽（5.3.5 停止新调用）：同样按块隔离，保住已完成成果
             errors.append(f"LLM 调用失败: {exc.message}")
             return {"_temp_id": spec["temp_id"], "_status": "failed", "_errors": errors,
                     "content": "", "content_format": "md_latex", "tags": [],

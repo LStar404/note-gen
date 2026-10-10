@@ -89,6 +89,10 @@ def plan_edit(state, *, doc_id: str, instruction: str, block_id: str | None = No
     resp = client.complete("agent", messages, schema=None, max_tokens=2000,
                            tools=AGENT_TOOLS, tool_choice="auto", doc_id=doc_id)
     tool_calls = _extract_tool_calls(resp)
+    if not tool_calls:
+        # 空计划曾静默返回 200（用户确认后什么都不发生）：必须给出可操作的错误
+        raise InputError("模型未返回任何修改计划（无工具调用），请重试或改写指令",
+                         code="EMPTY_PLAN")
     proposed = []
     affected_revisions = {}
     for call in tool_calls:
@@ -254,7 +258,41 @@ def _extract_tool_calls(resp: dict) -> list[dict]:
         except Exception:
             args = {}
         out.append({"name": fn.get("name"), "args": args})
-    if not out and isinstance(resp.get("output"), dict) and "tool_calls" in resp["output"]:
-        for call in resp["output"]["tool_calls"]:
-            out.append({"name": call.get("name"), "args": call.get("args", {})})
+    if out:
+        return out
+    # 模型有时不走 function-calling，而是把计划写成 JSON 正文（实测 MiMo 3/3 如此）：
+    # 从 output/raw_text 里按 proposed_changes/tool_calls 形状兜底解析，否则 agent 全瘫。
+    for cand in (resp.get("output"), resp.get("raw_text")):
+        obj = cand
+        if isinstance(obj, str):
+            text = obj.strip()
+            if text.startswith("```"):                 # 剥掉 markdown 代码围栏再解析
+                text = text.strip("`")
+                if text.lower().startswith(("json", "javascript")):
+                    text = text[4:] if text.lower().startswith("javascript") else text[4:]
+                text = text.strip()
+            try:
+                obj = json.loads(text)
+            except Exception:
+                continue
+        if not isinstance(obj, dict):
+            continue
+        items = obj.get("proposed_changes") or obj.get("tool_calls")
+        if isinstance(obj.get("plan"), dict):
+            items = items or obj["plan"].get("proposed_changes")
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            name = it.get("tool") or it.get("name")
+            # 模型侧参数键名不稳：args / parameters / arguments（MiMo 实测用 arguments）
+            args = it.get("args") or it.get("parameters") or it.get("arguments") or {}
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args or "{}")
+                except Exception:
+                    args = {}
+            if name:
+                out.append({"name": name, "args": args or {}})
+        if out:
+            break
     return out
