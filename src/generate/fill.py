@@ -59,8 +59,18 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
     max_in = int(config.get("generate", {}).get("fill_max_in", 8000))
     if estimate_tokens(prompt) > max_in:
-        fulltexts = "\n\n".join(f"[{aid}] {anchors_by_id[aid].get('content', '')[:800]}" for aid in source_ids)
-        prompt = prompt.replace(fulltexts, fulltexts)
+        # 超预算：先裁剪来源原文（保留锚点 id 与结构），仍超限再裁剪相邻上下文（5.3.2）
+        shorter = "\n\n".join(f"[{aid}] {anchors_by_id[aid].get('content', '')[:800]}" for aid in source_ids)
+        prompt = FILL_PROMPT.format(
+            block_type=spec.get("type", "definition"),
+            title=spec.get("title", ""),
+            fig_id=fig_id,
+            block_spec_json=json.dumps({k: spec.get(k) for k in
+                                        ("temp_id", "type", "title", "basis", "sources", "depends_on")},
+                                       ensure_ascii=False),
+            source_fulltexts=shorter,
+            fill_schema=json.dumps(schema, ensure_ascii=False),
+        ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
 
     errors: list[str] = []

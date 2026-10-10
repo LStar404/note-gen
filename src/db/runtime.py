@@ -202,7 +202,7 @@ class RuntimeDB:
                      affected_revisions: dict | None = None, ttl_hours: int = 24) -> None:
         now = utc_now_iso()
         import datetime as _dt
-        exp = (_dt.datetime.utcnow() + _dt.timedelta(hours=ttl_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        exp = (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=ttl_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self._lock, self._conn:
             self._conn.execute(
                 "INSERT INTO agent_sessions(plan_id,doc_id,scope,messages,status,confirmed_calls,"
@@ -222,7 +222,7 @@ class RuntimeDB:
     def unlock_block(self, plan_id: str, block_id: str, ttl_hours: int = 1) -> None:
         import datetime as _dt
         now = utc_now_iso()
-        exp = (_dt.datetime.utcnow() + _dt.timedelta(hours=ttl_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        exp = (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=ttl_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self._lock, self._conn:
             self._conn.execute(
                 "INSERT INTO block_unlocks(plan_id,block_id,unlocked_at,expires_at) VALUES(?,?,?,?) "

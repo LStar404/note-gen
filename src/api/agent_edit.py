@@ -6,7 +6,7 @@ import json
 import uuid
 from typing import Any
 
-from src.core.errors import BlockLocked, InputError, NotFound, SchemaViolation
+from src.core.errors import BlockLocked, ConflictError, InputError, NotFound, SchemaViolation
 from src.core.models import NoteBlock
 from src.core.paths import Layout
 from src.core.store import DocStore
@@ -121,12 +121,16 @@ def plan_edit(state, *, doc_id: str, instruction: str, block_id: str | None = No
 
 
 def execute_plan(state, *, doc_id: str, plan_id: str, confirmed: bool = False) -> dict:
-    """步骤 2：执行已确认的工具参数；每个工具一个可恢复提交，operation_id 去重。"""
+    """步骤 2：执行已确认的工具参数；每个工具一个可恢复提交，operation_id 去重。
+
+    exec 先校验 affected_revisions（计划时快照），再逐条执行；期间被改动则中止剩余工具。
+    """
     session = state.runtime.get_session(plan_id)
     if session is None:
         raise NotFound(f"plan 不存在: {plan_id}")
     if not confirmed:
         raise InputError("exec 需要 confirmed=true")
+    snapshot = {k: int(v) for k, v in (session.get("affected_revisions") or {}).items()}
     store = DocStore(state.layout, doc_id)
     scope_kind, scope_target = session["scope"].split(":", 1)
     scope = {"kind": scope_kind, "block_id": scope_target if scope_kind == "block" else None,
@@ -142,11 +146,25 @@ def execute_plan(state, *, doc_id: str, plan_id: str, confirmed: bool = False) -
         args = dict(call.get("args", {}))
         try:
             check_scope(store, scope, call["tool"], args)
-            result = run_tool(store, call["tool"], args, author="agent", plan_id=plan_id)
+            # 计划快照校验：目标块在 plan 之后被改过 → 中止，防止覆盖并发改动
+            for target_id in _targets_of(call["tool"], args):
+                if target_id in snapshot:
+                    current = store.get_block(target_id)["revision"]
+                    if int(current) != snapshot[target_id]:
+                        raise ConflictError(
+                            f"块 {target_id} 在计划确认后被修改（{snapshot[target_id]} → {current}），"
+                            f"已中止剩余操作，请重新规划",
+                            code="PLAN_STALE")
+            unlocked = (state.runtime.is_unlocked(args.get("block_id", ""), plan_id)
+                        or state.runtime.is_unlocked(args.get("from_block_id", ""), plan_id))
+            result = run_tool(store, call["tool"], args, author="agent", plan_id=plan_id,
+                              unlocked_for_agent=unlocked)
         except Exception as exc:
-            errors.append({"tool": call.get("tool"), "error": str(exc)})
-            state.runtime.update_task  # noop
-            break  # 部分执行语义：中止剩余工具，已成功部分保留
+            # 部分执行语义：中止剩余工具，已成功部分保留；错误带稳定 code 供前端处理
+            errors.append({"tool": call.get("tool"),
+                           "code": getattr(exc, "code", "INTERNAL_ERROR"),
+                           "error": str(exc)})
+            break
         state.runtime.record_operation(operation_id, plan_id, result)
         applied.append(result)
     state.runtime.save_session(plan_id, doc_id, session["scope"], session["messages"], "done",
@@ -156,6 +174,14 @@ def execute_plan(state, *, doc_id: str, plan_id: str, confirmed: bool = False) -
     if errors:
         out["error"] = errors[0]
     return out
+
+
+def _targets_of(tool: str, args: dict) -> list[str]:
+    if tool in ("update_block", "delete_block"):
+        return [args.get("block_id")] if args.get("block_id") else []
+    if tool == "link_blocks":
+        return [args.get("from_block_id")] if args.get("from_block_id") else []
+    return []
 
 
 def check_scope(store: DocStore, scope: dict, tool: str, args: dict) -> None:
@@ -190,12 +216,13 @@ def check_scope(store: DocStore, scope: dict, tool: str, args: dict) -> None:
 
 
 def run_tool(store: DocStore, tool: str, args: dict, *, author: str = "agent",
-             plan_id: str | None = None) -> dict:
+             plan_id: str | None = None, unlocked_for_agent: bool = False) -> dict:
     if tool == "update_block":
         block = store.update_block(args["block_id"],
                                    {k: v for k, v in args.items() if k in
                                     ("title", "content", "sources")},
                                    expected_revision=None, author=author,
+                                   unlocked_for_agent=unlocked_for_agent,
                                    message=args.get("message", "agent 编辑"))
         return {"tool": tool, "block_id": block["id"], "revision": block["revision"]}
     if tool == "create_block":

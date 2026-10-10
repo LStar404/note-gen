@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import dataclass, field
 from typing import Any, Iterable
@@ -66,7 +67,8 @@ class DocStore:
         bucket = entry[1].setdefault(kind, {})
         if chapter_id not in bucket:
             bucket[chapter_id] = loader()
-        return bucket[chapter_id]
+        # 深拷贝：调用方就地修改嵌套字段（sources/links/tags）不得污染缓存
+        return copy.deepcopy(bucket[chapter_id])
 
     @staticmethod
     def _invalidate(layout: Layout, doc_id: str) -> None:
