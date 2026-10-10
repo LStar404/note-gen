@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 from .errors import BlockLocked, NotFound, RevisionConflict, RevisionGone, SchemaViolation
-from .jsonl import dump_line, load_json, load_jsonl
+from .jsonl import dump_line, load_json, load_jsonl, loads_line
 from .models import (
     BLOCK_SNAPSHOT_FIELDS,
     Manifest,
@@ -63,6 +63,7 @@ def sort_blocks(rows: Iterable[dict]) -> list[dict]:
 # 进程级行缓存：key=(root, doc_id) -> (data_revision, {"anchors": {...}, "blocks": {...}})
 # 只缓存"已提交状态"，每次读取先比对 manifest.data_revision，提交即失效（4.2.2 单写者）。
 _ROW_CACHE: dict[tuple[str, str], tuple[int, dict]] = {}
+_MANIFEST_CACHE: dict[str, tuple[tuple, dict]] = {}   # path -> ((path, mtime_ns, size), data)
 _ROW_LOCK = threading.Lock()      # 后台任务线程与请求线程共享该缓存
 
 
@@ -93,12 +94,30 @@ class DocStore:
     def _invalidate(layout: Layout, doc_id: str) -> None:
         with _ROW_LOCK:
             _ROW_CACHE.pop((str(layout.root), doc_id), None)
+            _MANIFEST_CACHE.pop(str(layout.manifest(doc_id)), None)
 
     # ------------------------------------------------------------------ 读取
     def manifest(self) -> dict:
-        data = load_json(self.layout.manifest(self.doc_id), required=False)
+        """manifest 读取带元数据校验缓存（mtime+size 变化即失效）。
+
+        提交路径会几十次取 data_revision/manifest（每次提交实测 100+ 次），
+        反复读盘解析占单次提交 36% 的时间。
+        """
+        path = self.layout.manifest(self.doc_id)
+        try:
+            st = path.stat()
+        except OSError:
+            raise NotFound(f"文档不存在: {self.doc_id}")
+        cache_key = (str(path), st.st_mtime_ns, st.st_size)
+        with _ROW_LOCK:
+            cached = _MANIFEST_CACHE.get(str(path))
+            if cached is not None and cached[0] == cache_key:
+                return cached[1]
+        data = load_json(path, required=False)
         if data is None:
             raise NotFound(f"文档不存在: {self.doc_id}")
+        with _ROW_LOCK:
+            _MANIFEST_CACHE[str(path)] = (cache_key, data)
         return data
 
     def manifest_model(self) -> Manifest:
@@ -197,7 +216,7 @@ class DocStore:
 
         def rows_for(rel: str, chapter_id: str) -> list[dict]:
             if rel in overrides:
-                return [json.loads(x) for x in overrides[rel].decode("utf-8").split("\n") if x.strip()]
+                return [loads_line(x) for x in overrides[rel].split(b"\n") if x.strip()]
             # 走行缓存：同一提交内第二次取候选状态不再重复解析 JSONL
             return self.anchor_rows(chapter_id) if rel.startswith("anchors/") \
                 else self.block_rows(chapter_id, include_deleted=True)
@@ -217,11 +236,11 @@ class DocStore:
         for rel, data in (overrides or {}).items():
             if not rel.startswith(prefix):
                 continue
-            for line in data.decode("utf-8").split("\n"):
+            for line in data.split(b"\n"):
                 if not line.strip():
                     continue
                 try:
-                    row = json.loads(line)
+                    row = loads_line(line)
                 except Exception:
                     continue
                 key = row.get("anchor_id") if prefix == "anchors/" else row.get("id")
