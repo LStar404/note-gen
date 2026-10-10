@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from src.core.errors import PipelineError, RevisionConflict
+from src.core.errors import PipelineError, RevisionConflict, TaskCancelled
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.model_registry import ModelRegistry
 from src.core.paths import Layout
@@ -63,12 +63,26 @@ def _derive_heading_and_order(items: list[dict], anchors: list[dict], chapter_id
     return out
 
 
+def _normalize_sources(sources: list | None) -> list:
+    """4.6.1：一块内 anchor_id 唯一、≤5 条——模型输出归一，避免 commit 阶段才失败。"""
+    out: list = []
+    seen: set = set()
+    for src in sources or []:
+        aid = (src or {}).get("anchor_id")
+        if aid is None or aid in seen:
+            continue
+        seen.add(aid)
+        out.append(src)
+    return out[:5]
+
+
 def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = None,
                      client: LLMClient | None = None, config: dict | None = None,
                      registry: ModelRegistry | None = None, model: str | None = None,
                      force: bool = False, use_cache: bool = True, merge_mode: str = "merge",
                      task_id: str | None = None,
-                     progress: Callable[[dict], None] | None = None) -> dict:
+                     progress: Callable[[dict], None] | None = None,
+                     is_cancelled: Callable[[], bool] | None = None) -> dict:
     """分章生成笔记块；返回 ChapterReport（部分失败不误删旧块）。"""
     layout = layout or Layout(Path.cwd())
     config = config or {}
@@ -80,6 +94,10 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
     anchors_by_id = {a["anchor_id"]: a for a in anchors}
     if not anchors:
         raise PipelineError(f"章节 {chapter_id} 没有锚点，请先运行 anchor")
+
+    def _check_cancel() -> None:
+        if is_cancelled and is_cancelled():
+            raise TaskCancelled("任务已取消")
 
     base_revision = store.data_revision()
     outline_hash = chapter.get("outline_hash") or ""
@@ -116,9 +134,11 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
         if client is None:
             raise PipelineError("未配置 LLM 客户端，且无可用缓存")
         budget = BudgetGuard(float(config.get("generate", {}).get("max_cost_per_chapter", 0.0) or 0.0))
+        _check_cancel()
         outline = generate_outline(client, doc_id=doc_id, chapter_id=chapter_id, manifest=manifest,
                                    anchors=anchors, model=outline_model, config={**config, "_profile": profile},
-                                   budget=budget, task_id=task_id)
+                                   budget=budget, task_id=task_id, progress=progress,
+                                   is_cancelled=is_cancelled)
         report["outline_complete"] = outline.complete
         report["outline_errors"] = outline.errors
         if not outline.items:
@@ -128,17 +148,19 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
             return report
         if progress:
             progress({"stage": "outline_done", "count": len(outline.items)})
+        _check_cancel()
         filled = fill_all(client, doc_id=doc_id, chapter_id=chapter_id,
                           outline_items=outline.items, anchors_by_id=anchors_by_id,
                           anchors=anchors, model=fill_model,
                           config={**config, "_profile": profile},
                           concurrency=int(config.get("generate", {}).get("concurrency", 2)),
-                          budget=budget, task_id=task_id)
+                          budget=budget, task_id=task_id, progress=progress,
+                          is_cancelled=is_cancelled)
         candidates = []
         for item in outline.items:
             f = filled.get(item["temp_id"], {})
             cand = dict(item)
-            cand["sources"] = f.get("sources_patch", item.get("sources", []))
+            cand["sources"] = _normalize_sources(f.get("sources_patch", item.get("sources", [])))
             cand["basis"] = f.get("basis", item.get("basis", "anchored"))
             cand["content"] = f.get("content", "")
             cand["content_format"] = f.get("content_format", "md_latex")
@@ -161,6 +183,7 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
     if merge_report.get("failures"):
         report["status"] = "partial"
 
+    _check_cancel()
     try:
         store.commit(mutation, base_revision=base_revision, sync_backlinks=True)
     except RevisionConflict as exc:

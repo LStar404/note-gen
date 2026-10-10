@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from src.core.errors import ConflictError, InputError, NotFound
+from src.core.errors import ConflictError, InputError, NotFound, TaskCancelled
 from src.core.paths import DOC_ID_RE, FIGURE_ID_RE
 from src.core.store import DocStore
 from src.db import queries
@@ -73,7 +73,7 @@ async def create_doc(request: Request, file: UploadFile = File(...), title: str 
     target = st.layout.textbooks_dir / f"{doc}.pdf"
     target.write_bytes(data)
 
-    def run(req, progress, is_cancelled, register_artifact):
+    def run(req, progress, is_cancelled, register_artifact, task_id=None):
         progress({"stage": "ingest"})
         manifest = parse_pdf_with_fallback(target, st.layout.ingest_root,
                                            st.config.get("parser", {}).get("default", "auto"),
@@ -236,7 +236,7 @@ def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
     chapter_id = body.get("chapter_id")
     model = body.get("model")
 
-    def run(req, progress, is_cancelled, register_artifact):
+    def run(req, progress, is_cancelled, register_artifact, task_id=None):
         from src.generate.engine import generate_chapter
 
         store = DocStore(st.layout, doc_id)
@@ -244,12 +244,19 @@ def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
         reports = []
         for ch in chapters:
             if is_cancelled():
-                break
+                raise TaskCancelled("任务已取消")
             progress({"stage": "generate", "chapter_id": ch})
             reports.append(generate_chapter(doc_id, ch, layout=st.layout, client=st.client,
                                             config=st.config, registry=st.registry, model=model,
-                                            merge_mode="merge"))
+                                            merge_mode="merge", task_id=task_id,
+                                            progress=progress, is_cancelled=is_cancelled))
         return {"reports": reports}
+
+    # 防重复触发：同文档同章节已有排队/运行中的生成任务时直接复用（避免重复烧钱）
+    for t in st.runtime.list_tasks(doc_id=doc_id):
+        if (t.get("kind") == "generate" and t.get("status") in ("queued", "running")
+                and (t.get("request") or {}).get("chapter_id") == chapter_id):
+            return JSONResponse({"task_id": t["task_id"]}, status_code=202)
 
     task = st.tasks.submit("generate", run, {"doc_id": doc_id, "chapter_id": chapter_id},
                            doc_id=doc_id, idempotency_key=None)

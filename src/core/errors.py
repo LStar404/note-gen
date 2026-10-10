@@ -117,5 +117,12 @@ class PriceUnknown(NoteGenError):
     http_status = 422
 
 
+class TaskCancelled(NoteGenError):
+    """用户取消任务（4.2 / 9.2）：取消是正常结局而非失败。"""
+
+    code = "TASK_CANCELLED"
+    http_status = 409
+
+
 def error_response(exc: NoteGenError) -> dict:
     return exc.to_dict()

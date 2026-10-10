@@ -133,7 +133,7 @@ def trigger_export(request: Request, body: dict):
     lang = body.get("language") or st.config.get("generate", {}).get("output_language", "zh")
     encoding = body.get("encoding") or st.config.get("export", {}).get("encoding", "utf-8")
 
-    def run(req, progress, is_cancelled, register_artifact):
+    def run(req, progress, is_cancelled, register_artifact, task_id=None):
         from src.core.store import DocStore
         from src.export.anki_export import export_anki
         from src.export.md_export import export_md_book, export_md_chapter, export_md_obsidian

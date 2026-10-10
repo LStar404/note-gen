@@ -137,6 +137,17 @@ def validate_fill_payload(payload: dict, *, allowed_anchor_ids: set[str],
             anchor = anchors_by_id.get(src["anchor_id"])
             if anchor is not None and not quote_matches(anchor.get("content", ""), str(src["quote"])):
                 raise SchemaViolation(f"quote 不匹配锚点原文: {src['anchor_id']}")
+    # 4.6.1 归一：同一 anchor_id 在一块内不得重复、sources ≤ 5。模型偶发重复/超量时
+    # 就地去重截断（保留首次出现），否则要到 commit 才被 NoteBlock 校验拦下，整个章节失败。
+    dedup: list[dict] = []
+    seen: set[str] = set()
+    for src in sources:
+        if src["anchor_id"] in seen:
+            continue
+        seen.add(src["anchor_id"])
+        dedup.append(src)
+    sources = dedup[:5]
+    payload["sources_patch"] = sources
     validate_type_constraints(spec["type"], basis=payload["basis"], source_count=len(sources))
     return payload
 

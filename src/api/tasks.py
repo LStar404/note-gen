@@ -7,9 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-
-class TaskCancelled(Exception):
-    pass
+from src.core.errors import TaskCancelled
 
 
 class TaskManager:
@@ -41,10 +39,13 @@ class TaskManager:
         try:
             result = fn(request, progress=lambda p: self.runtime.update_task(task_id, progress=p),
                         is_cancelled=lambda: task_id in self._cancel,
-                        register_artifact=lambda name, path: self._artifacts.__setitem__(f"{task_id}:{name}", Path(path)))
+                        register_artifact=lambda name, path: self._artifacts.__setitem__(f"{task_id}:{name}", Path(path)),
+                        task_id=task_id)
             status = "partial" if result.get("partial") else "succeeded"
-            self.runtime.update_task(task_id, status=status, result=result,
-                                     progress={"stage": "done"})
+            if self.get(task_id).get("status") != "cancelled":
+                # 取消后 fn 仍正常返回时不改写结局：cancelled 是真实结局
+                self.runtime.update_task(task_id, status=status, result=result,
+                                         progress={"stage": "done"})
         except TaskCancelled as exc:
             self.runtime.update_task(task_id, status="cancelled", error={"message": str(exc)})
         except Exception as exc:  # 任务失败必须可解释（10.4）

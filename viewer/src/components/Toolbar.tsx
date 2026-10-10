@@ -2,6 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { useStore } from "../state/store";
 
+// 任务进度可读化（9.2 进度透传）：提纲 2/6 批、填充 3/20、生成 ch01
+function progressText(p: any): string {
+  if (!p) return "";
+  if (p.stage === "outline" && p.batches) return "提纲 " + (p.batch ?? 0) + "/" + p.batches + " 批";
+  if (p.stage === "outline_done") return "提纲完成 " + (p.count ?? 0) + " 项";
+  if (p.stage === "fill" && p.total) return "填充 " + (p.done ?? 0) + "/" + p.total;
+  if (p.stage === "generate") return p.chapter_id ? "生成 " + p.chapter_id : "生成中";
+  return String(p.stage ?? "");
+}
+
 export default function Toolbar() {
   const docs = useStore((s) => s.docs);
   const docId = useStore((s) => s.docId);
@@ -228,7 +238,7 @@ export default function Toolbar() {
             <div key={t.task_id} className="task-row" title={t.error?.message ?? ""}>
               <span>
                 {t.kind} · {t.status}
-                {t.progress?.stage ? " · " + t.progress.stage : ""}
+                {t.progress?.stage ? " · " + progressText(t.progress) : ""}
                 {t.status === "failed" && t.error?.message ? " · " + t.error.message : ""}
               </span>
               {["queued", "running"].includes(t.status) && (

@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable
 
-from src.core.errors import SchemaViolation
+from src.core.errors import SchemaViolation, TaskCancelled
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
@@ -108,14 +109,19 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
 def fill_all(client: LLMClient, *, doc_id: str, chapter_id: str, outline_items: list[dict],
              anchors_by_id: dict[str, dict], anchors: list[dict], model: str | None,
              config: dict, concurrency: int = 2, budget: BudgetGuard | None = None,
-             task_id: str | None = None) -> dict[str, dict]:
+             task_id: str | None = None,
+             progress: Callable[[dict], None] | None = None,
+             is_cancelled: Callable[[], bool] | None = None) -> dict[str, dict]:
     """按依赖分批并行填充；严格保证 depends_on 目标先于依赖者完成（5.3.1）。"""
     by_id = {i["temp_id"]: dict(i) for i in outline_items}
+    total = len(outline_items)
     filled: dict[str, dict] = {}
     semaphore = threading.Semaphore(max(1, int(concurrency)))
     lock = threading.Lock()
 
     def run(spec: dict) -> tuple[str, dict]:
+        if is_cancelled and is_cancelled():
+            raise TaskCancelled("任务已取消")
         with semaphore:
             related = [by_id[d]["title"] for d in spec.get("depends_on", []) if d in by_id]
             out = fill_one(client, doc_id=doc_id, chapter_id=chapter_id, spec=spec,
@@ -135,6 +141,8 @@ def fill_all(client: LLMClient, *, doc_id: str, chapter_id: str, outline_items: 
                 tid, out = fut.result()
                 with lock:
                     filled[tid] = out
+                if progress:
+                    progress({"stage": "fill", "done": len(filled), "total": total})
         ready_ids = {i["temp_id"] for i in ready}
         pending = [i for i in pending if i["temp_id"] not in ready_ids]
     return filled
