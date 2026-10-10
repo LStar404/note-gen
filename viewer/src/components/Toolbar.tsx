@@ -156,6 +156,35 @@ export default function Toolbar() {
         <input type="file" accept="application/pdf" hidden onChange={(e) => void importPdf(e.target.files?.[0] ?? null)} />
       </label>
 
+      {docId && (
+        <button
+          className="danger"
+          title="删除该教材（移入回收站 data/.trash，可找回）"
+          onClick={() => {
+            const doc = docs.find((d) => d.doc_id === docId);
+            const chapters = doc?.chapters?.length ?? 0;
+            const ok = window.confirm(
+              "确认删除教材《" + (doc?.title ?? docId) + "》？\n\n" +
+              "· 将删除其全部笔记块、锚点、历史与图资源（约 " + chapters + " 章）\n" +
+              "· 移入回收站 data/.trash，可在磁盘上找回\n" +
+              "· 此操作会立即从列表中移除该教材"
+            );
+            if (!ok) return;
+            void api
+              .deleteDoc(docId)
+              .then(async () => {
+                setToast("已删除《" + (doc?.title ?? docId) + "》，已移入回收站（data/.trash 可找回）");
+                useStore.setState({ docId: null, manifest: null, chapterId: null,
+                                    blocks: [], selectedBlockId: null });
+                await loadDocs();
+              })
+              .catch((e: any) => setToast("删除失败：" + e.message));
+          }}
+        >
+          删除教材
+        </button>
+      )}
+
       <button onClick={doGenerate}>生成本章</button>
       <button onClick={() => void doExport("md")}>导出 md</button>
       <button onClick={() => void doExport("tex")}>导出 tex</button>

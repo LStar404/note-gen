@@ -388,6 +388,24 @@ def cmd_restore(args) -> int:
     return 0
 
 
+def cmd_delete(args) -> int:
+    """删除教材（移入回收站）。破坏性操作必须 --yes。"""
+    layout = _layout()
+    if args.dry_run:
+        print(f"[dry-run] delete {args.doc_id}")
+        return 0
+    if not args.yes:
+        print("错误：删除教材需显式确认（加 --yes）", file=sys.stderr)
+        return 1
+    store = DocStore(layout, args.doc_id)
+    summary = {"blocks": len(store.all_block_rows(include_deleted=True)),
+               "anchors": len(store.all_anchor_rows())}
+    result = store.trash_document()
+    result["removed"] = summary
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_serve(args) -> int:
     from src.api.main import run_server
 
@@ -477,6 +495,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("restore"); common(sp); sp.add_argument("backup")
     sp.add_argument("--as-new-doc", action="store_true")
     sp.set_defaults(func=cmd_restore)
+
+    sp = sub.add_parser("delete"); common(sp)
+    sp.add_argument("doc_id")
+    sp.add_argument("--yes", action="store_true", help="确认删除（移入回收站 data/.trash）")
+    sp.set_defaults(func=cmd_delete)
 
     sp = sub.add_parser("serve"); common(sp)
     sp.add_argument("--host"); sp.add_argument("--port", type=int)

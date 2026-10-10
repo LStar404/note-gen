@@ -397,6 +397,40 @@ class DocStore:
         with doc_lock(self.layout, self.doc_id):
             return recover_doc(self.layout, self.doc_id)
 
+    def trash_document(self) -> dict:
+        """删除整个文档（4.1 文档事实源）：移入 data/.trash/<doc_id>-<ts>/ 而非物理删除。
+
+        - 持 per-doc 锁，先恢复未完成提交，避免与在途提交交错
+        - 同步清理 runtime.doc_map 点查映射，防止点查命中已删文档
+        - 回收站目录在 data/.trash/ 下（glob 一层扫描不到），不会被误列为教材
+        """
+        import shutil
+
+        with doc_lock(self.layout, self.doc_id):
+            recover_doc(self.layout, self.doc_id)
+            src = self.layout.doc_dir(self.doc_id)
+            if not src.exists():
+                raise NotFound(f"文档不存在: {self.doc_id}")
+            stamp = utc_now_iso().replace(":", "").replace("-", "")
+            trash_root = self.layout.data_dir / ".trash"
+            trash_root.mkdir(parents=True, exist_ok=True)
+            dest = trash_root / f"{self.doc_id}-{stamp}"
+            n = 1
+            while dest.exists():
+                dest = trash_root / f"{self.doc_id}-{stamp}-{n}"
+                n += 1
+            shutil.move(str(src), str(dest))
+
+        self._invalidate(self.layout, self.doc_id)
+        try:
+            from src.db.runtime import get_runtime
+
+            get_runtime(self.layout.runtime_db).forget_doc(self.doc_id)
+        except Exception:
+            pass
+        return {"doc_id": self.doc_id, "trashed_to": str(dest),
+                "recoverable": True}
+
     # ------------------------------------------------------------ 块生命周期
     def make_history_row(self, block: dict, author: str, message: str, now: str) -> dict:
         return {

@@ -99,6 +99,24 @@ def get_doc(request: Request, doc_id: str):
     return DocStore(st.layout, doc_id).manifest()
 
 
+@router.delete("/api/v1/docs/{doc_id}")
+def delete_doc(request: Request, doc_id: str, body: dict | None = None):
+    """删除教材（移入回收站，可恢复）。需 confirmed=true 显式确认（4.1 文档事实源）。"""
+    body = body or {}
+    if not body.get("confirmed"):
+        raise InputError("删除教材需要 confirmed=true（将移入回收站，可在 data/.trash 找回）")
+    st = state(request)
+    store = DocStore(st.layout, doc_id)
+    summary = {
+        "blocks": len(store.all_block_rows(include_deleted=True)),
+        "anchors": len(store.all_anchor_rows()),
+        "chapters": len(store.chapter_ids()),
+    }
+    result = store.trash_document()
+    result["removed"] = summary
+    return result
+
+
 @router.get("/api/v1/docs/{doc_id}/pdf")
 def get_pdf(request: Request, doc_id: str):
     """PDF 静态服务：支持 HTTP Range（206/416）与完整 GET（200）。"""

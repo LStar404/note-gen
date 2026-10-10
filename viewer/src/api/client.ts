@@ -50,6 +50,8 @@ export const api = {
 
   listDocs: () => api.get<{ docs: DocSummary[] }>("/api/v1/docs"),
   getManifest: (docId: string) => api.get<any>("/api/v1/docs/" + docId),
+  deleteDoc: (docId: string) =>
+    api.del<any>("/api/v1/docs/" + docId, { confirmed: true }),
   pdfUrl: (docId: string) => "/api/v1/docs/" + docId + "/pdf",
   figureUrl: (docId: string, figureId: string) => "/api/v1/docs/" + docId + "/figures/" + figureId,
   listBlocks: (docId: string, chapterId: string, includeDeleted = false) =>

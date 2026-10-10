@@ -127,6 +127,7 @@ python cli.py run data/textbooks/我的教材.pdf --doc-id my-book --title "我�
 | `report <doc_id>` | 汇总各阶段报告 | 含死链/保护跳过清单 |
 | `eval <doc_id>` | 生成质量评测 | `--update-baseline`（固化基线） |
 | `backup <doc_id>` | 备份（含校验和） | `--out` |
+| `delete <doc_id>` | 删除教材（移入回收站） | `--yes`（必填） |
 | `restore <zip>` | 恢复（防 Zip Slip） | `--as-new-doc` |
 | `serve` | 启动 Web 服务 | `--host` `--port` |
 
@@ -288,6 +289,7 @@ python cli.py eval <doc_id>             # 生成质量评测（三维度 + 基�
 |---|---|
 | 导入任务显示 `failed` | 任务卡会直接显示原因；常见：损坏 PDF、文档已存在（409）、解析器不可用 |
 | 提示"文档已存在" | 同一 PDF 重复导入会被拒绝以保护已有笔记；确认后可加 `overwrite=true` 重建 |
+| 误删了教材 | 删除走回收站：`data/.trash/<doc_id>-<时间戳>/`，把该目录移回 `data/` 即可恢复 |
 | 生成提示"未配置生成模型" | 到 设置 → 任务路由 指定模型，或改 `config.yaml generate.models.default` |
 | agent 按钮不可用 | 需要具备 `tools` 能力的模型（设置里勾选能力或换模型） |
 | 扫描件导入后是空的 | 检查 设置 → OCR 模式 是否为 `off`；设为 `auto/force` 后重新导入 |

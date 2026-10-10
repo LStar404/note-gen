@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -144,6 +146,36 @@ def test_models_and_usage(client):
 
     r = client.get("/api/v1/usage")
     assert r.status_code == 200
+
+
+def test_delete_doc_requires_confirmed_and_moves_to_trash(client, sample_doc):
+    """删除教材：需 confirmed；移入回收站（可恢复）；列表/点查立即失效。"""
+    layout, doc_id = sample_doc
+    r = client.delete(f"/api/v1/docs/{doc_id}")
+    assert r.status_code == 400 and "confirmed" in r.text, "未确认必须拒绝"
+
+    r = client.request("DELETE", f"/api/v1/docs/{doc_id}", json={"confirmed": True})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["doc_id"] == doc_id and body["recoverable"] is True
+    assert body["removed"]["anchors"] > 0
+
+    # 回收站目录存在且含 manifest（可恢复）
+    trash = Path(layout.data_dir) / ".trash"
+    moved = list(trash.glob(f"{doc_id}-*/manifest.json"))
+    assert moved, "应移入 data/.trash"
+
+    # 列表不再出现（.trash 是二层目录，一层 glob 扫不到）
+    docs = client.get("/api/v1/docs").json()["docs"]
+    assert all(d["doc_id"] != doc_id for d in docs)
+
+    # 点查/读取失效
+    assert client.get(f"/api/v1/docs/{doc_id}").status_code == 404
+    assert client.get("/api/v1/blocks/b_AAAAAAAAAAAA").status_code == 404
+
+    # 不存在的文档
+    r = client.request("DELETE", "/api/v1/docs/no-such-doc", json={"confirmed": True})
+    assert r.status_code == 404
 
 
 def test_export_task(client):
