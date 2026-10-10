@@ -21,10 +21,12 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def reindex_doc(layout: Layout, doc_id: str, vec_dim: int | None = None) -> dict:
+def reindex_doc(layout: Layout, doc_id: str, vec_dim: int | None = None,
+                *, blocks_only: bool = False) -> dict:
     """锁内从已提交主数据重建派生表，并在同一事务内更新 index_meta。
 
-    同时重建 sqlite-vec 向量表（附录 B vec_anchors）；向量缺失的锚点不入表。
+    blocks_only=True 走快路径：只刷新 blocks/anchor_blocks/block_links（块编辑热路径），
+    不重建 anchors 与 FTS（锚点未变）；否则全量重建（含 sqlite-vec 向量表）。
     """
     store = DocStore(layout, doc_id)
     manifest = store.manifest()
@@ -32,25 +34,27 @@ def reindex_doc(layout: Layout, doc_id: str, vec_dim: int | None = None) -> dict
     conn = _connect(db_path)
     try:
         with conn:
-            for table in ("anchor_blocks", "block_links", "blocks", "anchors",
-                          "chapters", "documents"):
+            tables = ("anchor_blocks", "block_links", "blocks") if blocks_only else (
+                "anchor_blocks", "block_links", "blocks", "anchors", "chapters", "documents")
+            for table in tables:
                 conn.execute(f"DELETE FROM {table}")
             try:
                 conn.execute("INSERT INTO anchors_fts(anchors_fts) VALUES('delete-all')")
             except sqlite3.OperationalError:
                 pass
 
-            conn.execute(
-                "INSERT INTO documents(doc_id,title,pdf_sha256,parser_name,schema_version)"
-                " VALUES(?,?,?,?,?)",
-                (manifest["doc_id"], manifest["title"], manifest["pdf_sha256"],
-                 manifest["parser"]["name"], manifest["schema_version"]))
-            for ch in manifest.get("chapters", []):
-                conn.execute("INSERT INTO chapters(doc_id,chapter_id,title,page_start,page_end)"
-                             " VALUES(?,?,?,?,?)",
-                             (doc_id, ch["chapter_id"], ch["title"], ch["page_start"], ch["page_end"]))
+            if not blocks_only:
+                conn.execute(
+                    "INSERT INTO documents(doc_id,title,pdf_sha256,parser_name,schema_version)"
+                    " VALUES(?,?,?,?,?)",
+                    (manifest["doc_id"], manifest["title"], manifest["pdf_sha256"],
+                     manifest["parser"]["name"], manifest["schema_version"]))
+                for ch in manifest.get("chapters", []):
+                    conn.execute("INSERT INTO chapters(doc_id,chapter_id,title,page_start,page_end)"
+                                 " VALUES(?,?,?,?,?)",
+                                 (doc_id, ch["chapter_id"], ch["title"], ch["page_start"], ch["page_end"]))
 
-            anchors = store.all_anchor_rows()
+            anchors = [] if blocks_only else store.all_anchor_rows()
             for a in anchors:
                 conn.execute(
                     "INSERT OR REPLACE INTO anchors(anchor_id,doc_id,chapter_id,page,bbox_x0,bbox_y0,"
@@ -59,9 +63,7 @@ def reindex_doc(layout: Layout, doc_id: str, vec_dim: int | None = None) -> dict
                     (a["anchor_id"], doc_id, a["chapter_id"], a["page"],
                      float(a["bbox"][0]), float(a["bbox"][1]), float(a["bbox"][2]), float(a["bbox"][3]),
                      a["content_type"], a["reading_order"], a.get("heading_level", 0), a["content"]))
-                for bid in a.get("note_block_ids", []):
-                    conn.execute("INSERT OR IGNORE INTO anchor_blocks(anchor_id,block_id) VALUES(?,?)",
-                                 (a["anchor_id"], bid))
+                _ = a  # anchor_blocks 由块的 sources 派生（见下），快路径不依赖锚点扫描
 
             blocks = store.all_block_rows(include_deleted=True)
             for b in blocks:
@@ -71,21 +73,38 @@ def reindex_doc(layout: Layout, doc_id: str, vec_dim: int | None = None) -> dict
                     (b["id"], doc_id, b["chapter_id"], b["type"], b["title"], b["status"],
                      float(b["order"]), int(b["revision"]),
                      1 if b.get("generation_protected") else 0, b.get("deleted_at")))
+                # anchor_blocks 由块的 sources 派生（I3 下与 note_block_ids 等价），
+                # 这样块编辑快路径无需扫描锚点文件
+                if not b.get("deleted_at"):
+                    for src in b.get("sources", []):
+                        aid = src.get("anchor_id")
+                        if aid:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO anchor_blocks(anchor_id,block_id) VALUES(?,?)",
+                                (aid, b["id"]))
                 for ln in b.get("links", []):
                     if ln.startswith("http://") or ln.startswith("https://") or ln.startswith("ref_"):
                         continue
                     conn.execute("INSERT OR IGNORE INTO block_links(from_block_id,to_block_id) VALUES(?,?)",
                                  (b["id"], ln))
 
-            # 语义向量层（v2）：从 anchors.embedding 重建
+            # 语义向量层（v2）：从 anchors.embedding 重建（锚点未变的快路径跳过）
+            vec_count = 0
+            if blocks_only and _vec_table_exists(conn):
+                try:
+                    vec_count = conn.execute("SELECT COUNT(*) FROM vec_anchors").fetchone()[0]
+                except Exception:
+                    vec_count = 0        # vec0 扩展未加载：向量数不变，不必重建
             dim = vec_dim
             if dim is None:
                 emb = next((a.get("embedding") for a in anchors if a.get("embedding")), None)
                 dim = len(emb) if emb else DEFAULT_DIM
-            vec_count = rebuild_vectors(conn, anchors, int(dim))
+            if not blocks_only:
+                vec_count = rebuild_vectors(conn, anchors, int(dim))
 
             try:
-                conn.execute("INSERT INTO anchors_fts(anchors_fts) VALUES('rebuild')")
+                if not blocks_only:
+                    conn.execute("INSERT INTO anchors_fts(anchors_fts) VALUES('rebuild')")
             except sqlite3.OperationalError:
                 for a in anchors:
                     conn.execute("INSERT INTO anchors_fts(rowid, content) SELECT rowid, content FROM anchors WHERE anchor_id=?",
@@ -113,6 +132,14 @@ def reindex_doc(layout: Layout, doc_id: str, vec_dim: int | None = None) -> dict
                 "vectors": vec_count}
     finally:
         conn.close()
+
+
+def _vec_table_exists(conn: sqlite3.Connection) -> bool:
+    try:
+        return conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vec_anchors'").fetchone() is not None
+    except Exception:
+        return False
 
 
 def index_meta(layout: Layout, doc_id: str) -> dict | None:

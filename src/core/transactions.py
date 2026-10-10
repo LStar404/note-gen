@@ -207,17 +207,25 @@ def recover_doc(layout: Layout, doc_id: str) -> dict:
             status["corrupt"].append({"tx": tx_dir.name, "error": exc.message})
             continue
         atomic_write_bytes(tx_dir / "DONE", (canonical_json({"tx_id": intent["tx_id"]})).encode("utf-8"))
-        _finish_index_and_cleanup(layout, doc_id, tx_dir)
+        _finish_index_and_cleanup(layout, doc_id, tx_dir,
+                                  changed=[t.get("rel_path", "") for t in intent.get("targets", [])])
         status["recovered"].append(tx_dir.name)
     return status
 
 
-def _finish_index_and_cleanup(layout: Layout, doc_id: str, tx_dir: Path) -> None:
-    """DONE 后同步 SQLite；同步成功才清理日志（4.2.2 第 3 条）。"""
+def _finish_index_and_cleanup(layout: Layout, doc_id: str, tx_dir: Path,
+                              changed: list[str] | None = None) -> None:
+    """DONE 后同步 SQLite；同步成功才清理日志（4.2.2 第 3 条）。
+
+    只改 blocks/history 的提交走 reindex 快路径（不重建 anchors/FTS），
+    大文档上的块编辑从 O(全库) 降到 O(受影响章)。
+    """
     try:
         from src.db.reindex import reindex_doc
 
-        reindex_doc(layout, doc_id)
+        blocks_only = bool(changed) and all(
+            (not c.startswith("anchors/")) for c in changed)
+        reindex_doc(layout, doc_id, blocks_only=blocks_only)
     except Exception:
         return  # 索引滞后属正常，保留日志待下次恢复
     shutil.rmtree(tx_dir, ignore_errors=True)
@@ -282,6 +290,7 @@ def commit_doc(
         except DataCorrupt:
             raise
         atomic_write_bytes(tx_dir / "DONE", (canonical_json({"tx_id": intent["tx_id"]})).encode("utf-8"))
-        _finish_index_and_cleanup(layout, doc_id, tx_dir)
+        _finish_index_and_cleanup(layout, doc_id, tx_dir,
+                                  changed=[c.rel_path for c in planned])
         return CommitResult(tx_id=intent["tx_id"], base_revision=int(base_revision),
                             new_revision=new_revision, files=[c.rel_path for c in planned])
