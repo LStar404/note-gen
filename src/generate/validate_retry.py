@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from src.core.errors import SchemaViolation
-from src.core.models import snap_quote, validate_type_constraints
+from src.core.models import find_quote_anchor, snap_quote, validate_type_constraints
 
 MATH_PATTERN = re.compile(r"(\$\$.*?\$\$|\$.*?\$|\\\(.*?\\\)|\\\[.*?\\\])", re.DOTALL)
 _FENCE = chr(96) * 3
@@ -139,6 +139,12 @@ def validate_fill_payload(payload: dict, *, allowed_anchor_ids: set[str],
                 # 4.6.1：先把 quote 吸附回原文逐字片段（模型空白/标点/轻微改写都被纠正），
                 # 真编造（定位不到）才判失败——否则整块被丢，实测 ch08 因此丢 22/61 块
                 fixed = snap_quote(anchor.get("content", ""), str(src["quote"]))
+                if fixed is None:
+                    # 模型可能把 B 锚点的原文挂到 A 锚点名下：在允许集里找逐字命中，
+                    # 唯一命中则改挂回真实出处（多命中不猜，仍判失败）
+                    hit = find_quote_anchor(str(src["quote"]), anchors_by_id, set(allowed_anchor_ids))
+                    if hit is not None:
+                        src["anchor_id"], fixed = hit
                 if fixed is None:
                     raise SchemaViolation(f"quote 不匹配锚点原文: {src['anchor_id']}")
                 src["quote"] = fixed

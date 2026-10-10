@@ -367,3 +367,30 @@ def snap_quote(anchor_content: str, quote: str) -> str | None:
     if end <= start:
         return None
     return anchor_content[cidx[start]: cidx[end - 1] + 1][:300]
+
+
+def find_quote_anchor(quote: str, anchors_by_id: dict, allowed_ids: set[str]) -> tuple[str, str] | None:
+    """引文贴错锚点时的改挂修复：在允许的锚点里找 quote 的逐字命中（仅空白差异）。
+
+    只接受「唯一」命中且逐字（不含模糊匹配）——模型把 B 锚点的原文挂到 A 锚点名下
+    是常见错误，改挂回真实出处比整块丢弃更忠实（4.6.1 的 quote-锚点一致性因此更强）。
+    多个锚点同时命中视为歧义，返回 None 交给上层判失败。
+    """
+    if not isinstance(quote, str) or not quote.strip():
+        return None
+    qs, _ = _strip_ws_map(quote)
+    if not qs:
+        return None
+    hits: list[tuple[str, str]] = []
+    for aid in allowed_ids:
+        anchor = anchors_by_id.get(aid) if isinstance(anchors_by_id, dict) else None
+        content = (anchor or {}).get("content", "") if isinstance(anchor, dict) else ""
+        if not content:
+            continue
+        cs, cidx = _strip_ws_map(content)
+        pos = cs.find(qs)
+        if pos >= 0:
+            hits.append((aid, content[cidx[pos]: cidx[pos + len(qs) - 1] + 1][:300]))
+        if len(hits) > 1:
+            return None                      # 歧义：不猜
+    return hits[0] if len(hits) == 1 else None
