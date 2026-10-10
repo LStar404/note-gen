@@ -9,7 +9,7 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 
-from src.core.errors import InputError, NotFound
+from src.core.errors import ConflictError, InputError, NotFound
 from src.core.paths import DOC_ID_RE, FIGURE_ID_RE
 from src.core.store import DocStore
 from src.db import queries
@@ -45,10 +45,13 @@ def list_docs(request: Request):
 
 @router.post("/api/v1/docs")
 async def create_doc(request: Request, file: UploadFile = File(...), title: str | None = Form(None),
-                     profile: str = Form("textbook"), doc_id: str | None = Form(None)):
+                     profile: str = Form("textbook"), doc_id: str | None = Form(None),
+                     overwrite: bool = Form(False)):
     st = state(request)
     if not file.filename.lower().endswith(".pdf"):
         raise InputError("只支持 PDF 文件")
+    if not (file.filename or "").strip():
+        raise InputError("文件名为空")
     data = await file.read()
     if len(data) > 200 * 1024 * 1024:
         raise InputError("PDF 超过 200 MiB 限制")
@@ -58,6 +61,16 @@ async def create_doc(request: Request, file: UploadFile = File(...), title: str 
     doc = doc_id or ("doc-" + hashlib.sha256(data).hexdigest()[:12])
     if not DOC_ID_RE.match(doc):
         raise InputError(f"doc_id 非法: {doc}")
+    # 重复导入（同哈希/同 doc_id）：默认拒绝，避免覆盖已有笔记；overwrite 显式确认后重建
+    if st.layout.manifest(doc).exists():
+        if not overwrite:
+            raise ConflictError(
+                f"文档已存在：{doc}（同名/同哈希 PDF 已导入）",
+                detail={"doc_id": doc,
+                        "hint": "如需重新导入，请先在 UI 删除该教材，或传 overwrite=true（将重建解析产物）"})
+        import shutil
+
+        shutil.rmtree(st.layout.doc_dir(doc), ignore_errors=True)
     st.layout.textbooks_dir.mkdir(parents=True, exist_ok=True)
     target = st.layout.textbooks_dir / f"{doc}.pdf"
     target.write_bytes(data)

@@ -163,10 +163,11 @@ export default function Toolbar() {
       {tasks.length > 0 && (
         <div className="task-tray">
           {tasks.map((t) => (
-            <div key={t.task_id} className="task-row">
+            <div key={t.task_id} className="task-row" title={t.error?.message ?? ""}>
               <span>
                 {t.kind} · {t.status}
                 {t.progress?.stage ? " · " + t.progress.stage : ""}
+                {t.status === "failed" && t.error?.message ? " · " + t.error.message : ""}
               </span>
               {["queued", "running"].includes(t.status) && (
                 <button

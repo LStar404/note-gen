@@ -106,6 +106,8 @@ def md_block_to_tex(content: str) -> str:
 
 def export_tex_chapter(store: DocStore, chapter_id: str, *, out_dir: Path,
                        lang: str = "zh", encoding: str = "utf-8") -> Path:
+    # TeX/xelatex 默认按 UTF-8 读取；非 UTF-8 编码会让 .tex 无法编译，故强制 UTF-8
+    encoding = "utf-8"
     labels = labels_for(lang, encoding=encoding)
     manifest = store.manifest()
     chapter = store.chapter(chapter_id)
@@ -160,6 +162,7 @@ def export_tex_chapter(store: DocStore, chapter_id: str, *, out_dir: Path,
 
 def export_tex_book(store: DocStore, *, out_dir: Path, lang: str = "zh",
                     encoding: str = "utf-8") -> Path:
+    encoding = "utf-8"   # 同 export_tex_chapter：TeX 编译需要 UTF-8
     manifest = store.manifest()
     preamble = (TEMPLATE_DIR / "tex_preamble.tex").read_text(encoding="utf-8")
     parts = [B + "tableofcontents", ""]
