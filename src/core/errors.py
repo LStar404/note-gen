@@ -34,6 +34,24 @@ class RetryableError(NoteGenError):
     http_status = 502
 
 
+class LLMError(NoteGenError):
+    """LLM 上游返回的不可重试错误（参数非法、模型不存在等 4xx）。
+
+    与 RetryableError 相对：这类错误重试多少次都不会成功，必须立刻上抛，
+    否则用户要先白等 3 次退避重试，最后只看到含混的「调用被拒绝 400」。
+    """
+
+    code = "LLM_ERROR"
+    http_status = 502
+
+
+class AuthError(LLMError):
+    """401/403：API Key 无效或无权访问该模型（唯一修复方式是换密钥/换模型）。"""
+
+    code = "LLM_AUTH_FAILED"
+    http_status = 502
+
+
 class PipelineError(NoteGenError):
     code = "PIPELINE_ERROR"
     http_status = 500

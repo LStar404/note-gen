@@ -117,6 +117,36 @@ def test_masked_key_roundtrip_preserves_real_key(client):
     assert client.app.state.app_state.registry.provider("openai")["api_key"] == "sk-new-0001"
 
 
+def test_key_without_models_reports_model_gap_not_missing_key(client):
+    """回归：有密钥但零模型时，keys 检查不得误报「尚未配置任何 API Key」。
+
+    旧实现用同一个 any_keyed（密钥 + 模型）驱动 models 与 keys 两项检查，
+    用户实际处境（深寻密钥已存、但 deepseek 无模型）会被提示成「没配密钥」，
+    从而被引向反复轮换密钥的死路。
+    """
+    r = client.put("/api/v1/models/deepseek", json={
+        "id": "deepseek", "label": "ds", "protocol": "openai_compat",
+        "base_url": "https://api.deepseek.com", "api_key": "sk-fdc0000000000000000000000003fb71e",
+        "api_key_env": None, "models": [],
+    })
+    assert r.status_code == 200
+
+    body = client.get("/api/v1/setup/status").json()
+    checks = {c["id"]: c for c in body["checks"]}
+    assert checks["keys"]["level"] == "warn"
+    assert "尚未配置任何 API Key" not in checks["keys"]["detail"]
+    assert "deepseek" in checks["keys"]["detail"] and "未登记模型" in checks["keys"]["detail"]
+    assert "401" in checks["keys"]["fix"]           # 明确指向「密钥可能无效」这一后续结论
+
+    assert checks["models"]["level"] == "fail"
+    assert "deepseek" in checks["models"]["fix"] and "补至少一个模型" in checks["models"]["fix"]
+
+    prov = {p["id"]: p for p in body["providers"]}["deepseek"]
+    assert prov["key_configured"] is True and prov["model_count"] == 0
+    assert body["ready"] is False
+    assert {s["id"]: s for s in body["steps"]}["model"]["done"] is False
+
+
 def test_setup_agent_slot_requires_tools(client):
     client.put("/api/v1/models/openai", json={
         "id": "openai", "protocol": "openai_compat", "base_url": "https://api.openai.com/v1",

@@ -178,7 +178,7 @@ def build_setup_status(state_obj) -> dict:
 
     # ---- 模型与密钥 ----
     prov_rows = []
-    any_keyed = False
+    any_keyed = False          # 至少有一个供应商「密钥 + 模型」齐备，可直接路由
     for p in registry.providers():
         has_key, source, masked = _key_source(p, registry)
         models = p.get("models") or []
@@ -191,16 +191,25 @@ def build_setup_status(state_obj) -> dict:
         if has_key and models:
             any_keyed = True
 
+    # 已配密钥但一个模型都没登记：密钥配了也用不上（旧实现与「完全没配密钥」混为一谈）
+    key_only = [r["id"] for r in prov_rows if r["key_configured"] and not r["model_count"]]
+
     checks.append(_make_check(
         "models", "ok" if any_keyed else "fail", "模型接入",
         ("已接入 " + ", ".join(f"{r['id']}({r['model_count']})" for r in prov_rows if r["model_count"]))
         if any_keyed else "尚无「已配置密钥 + 含模型」的供应商——生成笔记需要至少一个",
-        None if any_keyed else "在下一步「接入模型」中添加供应商、API Key 与模型"))
+        None if any_keyed else (
+            "、".join(key_only) + " 已配置密钥但没有模型 id，先给它补至少一个模型（否则路由里选不到）"
+            if key_only else "在下一步「接入模型」中添加供应商、API Key 与模型")))
 
     checks.append(_make_check(
         "keys", "ok" if any_keyed else "warn", "API Key",
-        "已配置（环境变量或本地明文，接口只回显末 4 位）" if any_keyed else "尚未配置任何 API Key",
-        None if any_keyed else "推荐用环境变量（api_key_env），避免明文落盘"))
+        "已配置（环境变量或本地明文，接口只回显末 4 位）" if any_keyed else (
+            "已配置 " + "、".join(key_only) + " 的密钥，但这些供应商未登记模型"
+            if key_only else "尚未配置任何 API Key"),
+        None if any_keyed else (
+            "先补模型 id，再点「测试」验证密钥；返回 401 说明密钥无效，需换新密钥"
+            if key_only else "推荐用环境变量（api_key_env），避免明文落盘")))
 
     # ---- 路由 ----
     default_ok = bool(routes.get("default"))

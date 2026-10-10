@@ -12,7 +12,7 @@ import time
 import uuid
 from typing import Any, Protocol
 
-from .errors import PriceUnknown, RetryableError
+from .errors import AuthError, LLMError, NoteGenError, PriceUnknown, RetryableError
 from .model_registry import ModelRegistry
 from .text import estimate_tokens
 
@@ -61,10 +61,21 @@ class OpenAICompatAdapter:
                               timeout=self.timeout)
         except Exception as exc:  # 传输层失败按可重试处理（10.4）
             raise RetryableError(f"LLM 请求失败: {exc}")
+        if resp.status_code in (401, 403):
+            # 鉴权失败重试不可能成功：立即上抛，别让用户等满退避才看到含混提示
+            raise AuthError(
+                f"LLM 鉴权失败 {resp.status_code}：API Key 无效或无权访问模型 {model}"
+                f"（供应商 {self.provider_id}）——请在「配置指南 → 接入模型」核对密钥与模型 id",
+                detail={"provider_id": self.provider_id, "status": resp.status_code,
+                        "body": resp.text[:500]})
         if resp.status_code in (429, 500, 502, 503, 504):
             raise RetryableError(f"LLM 服务返回 {resp.status_code}", detail={"body": resp.text[:500]})
         if resp.status_code >= 400:
-            raise RetryableError(f"LLM 调用被拒绝 {resp.status_code}", detail={"body": resp.text[:500]})
+            # 其余 4xx（400 参数/404 模型不存在/422 等）同样不可重试
+            raise LLMError(
+                f"LLM 调用被拒绝 {resp.status_code}（供应商 {self.provider_id}，模型 {model}）",
+                detail={"provider_id": self.provider_id, "status": resp.status_code,
+                        "body": resp.text[:500]})
         data = resp.json()
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
@@ -229,6 +240,14 @@ class LLMClient:
                     raise
                 time.sleep(min(8.0, 0.5 * (2 ** attempts)))
                 continue
+            except NoteGenError:
+                # 不可重试错误（鉴权/参数/模型不存在）：只记一次失败，立即上抛
+                self.runtime.log_usage(
+                    provider_id=provider_cfg["id"], model=model_name, task=task,
+                    request_id=request_id, doc_id=doc_id, chapter_id=chapter_id,
+                    tokens_in=est_in, tokens_out=None, cost_est=None,
+                    success=False, estimated=True, task_id=task_id)
+                raise
 
             usage = result.get("usage") or {}
             tin = usage.get("in") or est_in
