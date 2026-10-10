@@ -21,8 +21,11 @@ export default function BlockCard({ block, selected, onSelect }: {
   selected: boolean;
   onSelect: (id: string) => void;
 }) {
-  const anchors = useStore((s) => s.anchors);
   const fetchAnchors = useStore((s) => s.fetchAnchors);
+  // 订阅粒度：只取本卡来源的页码字符串（原始值比较），避免任意锚点更新导致全部卡片重渲染
+  const sourceKey = useStore((s) =>
+    block.sources.map((src) => (s.anchors[src.anchor_id]?.page ?? "?")).join("|"));
+  const pages = sourceKey.split("|");
   const setHighlight = useStore((s) => s.setHighlight);
   const setPdfPage = useStore((s) => s.setPdfPage);
   const setToast = useStore((s) => s.setToast);
@@ -34,7 +37,9 @@ export default function BlockCard({ block, selected, onSelect }: {
 
   const gotoAnchor = async (anchorId: string) => {
     try {
-      const anchor = anchors[anchorId] ?? (await api.getAnchor(anchorId));
+      // 点击时按需读取（useStore.getState 不产生订阅），避免为取页码而重渲染全部卡片
+      const cached = useStore.getState().anchors[anchorId];
+      const anchor = cached ?? (await api.getAnchor(anchorId));
       setHighlight(anchor);           // 高亮 + 2 秒脉冲 + 滚动居中（6.2）
       setPdfPage(anchor.page);
     } catch (e: any) {
@@ -63,7 +68,7 @@ export default function BlockCard({ block, selected, onSelect }: {
               void gotoAnchor(s.anchor_id);
             }}
           >
-            {"📖 p." + (anchors[s.anchor_id]?.page ?? "?") + " · " + (RELATION_CN[s.relation] ?? s.relation)}
+            {"📖 p." + (pages[i] ?? "?") + " · " + (RELATION_CN[s.relation] ?? s.relation)}
           </button>
         ))}
       </div>

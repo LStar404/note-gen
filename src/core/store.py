@@ -168,6 +168,15 @@ class DocStore:
         return {k: _clone_row(v) for k, v in mapping.items()}
 
     def get_block(self, block_id: str, include_deleted: bool = True) -> dict:
+        """点查：命中 id 映射备忘时只克隆目标行，不复制整表。"""
+        rev = self.data_revision()
+        bucket = "all" if include_deleted else "live"
+        with _ROW_LOCK:
+            entry = _ROW_CACHE.get(self._cache_key)
+            memo = entry[1].get("idmap", {}) if entry and entry[0] == rev else {}
+            hit = memo.get(bucket, {}).get(block_id) if bucket in memo else None
+        if hit is not None:
+            return _clone_row(hit)
         block = self.blocks_by_id(include_deleted=include_deleted).get(block_id)
         if block is None:
             raise NotFound(f"块不存在: {block_id}")

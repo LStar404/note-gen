@@ -54,6 +54,9 @@ class TaskManager:
         return self.runtime.get_task(task_id)
 
     def cancel(self, task_id: str) -> dict:
+        task = self.runtime.get_task(task_id)
+        if task.get("status") not in ("queued", "running"):
+            return task          # 已结束任务保持真实结局，不被改写为 cancelled
         with self._lock:
             self._cancel.add(task_id)
         return self.runtime.update_task(task_id, status="cancelled")
