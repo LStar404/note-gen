@@ -25,6 +25,8 @@ DEFAULTS: dict[str, Any] = {
         },
         "outline_max_in": 32000,
         "fill_max_in": 8000,
+        "outline_max_out": 16000,
+        "fill_max_out": 6000,
         "concurrency": 2,
         "max_cost_per_chapter": 0.0,
         "temperature": 0.2,

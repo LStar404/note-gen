@@ -111,6 +111,8 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
         outline_model=model_fingerprint(registry, outline_model),
         fill_model=model_fingerprint(registry, fill_model),
         params={"temperature": config.get("generate", {}).get("temperature"),
+                "outline_max_out": config.get("generate", {}).get("outline_max_out", 16000),
+                "fill_max_out": config.get("generate", {}).get("fill_max_out", 6000),
                 "prompt_version": PROMPT_VERSION})
 
     report: dict[str, Any] = {

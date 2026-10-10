@@ -73,9 +73,12 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
         ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
 
+    # 输出预算（5.3.2 可配置）：写死 2000 会把长块 JSON 截断成非法输出，
+    # 重试 3 次仍失败 → 整块被丢（实测 ch06 因此丢了 12/48 块）
+    max_out = int(config.get("generate", {}).get("fill_max_out", 6000))
     errors: list[str] = []
     for attempt in range(4):           # 首次 + 最多 3 次修复
-        resp = client.complete("fill", messages, schema=schema, max_tokens=2000,
+        resp = client.complete("fill", messages, schema=schema, max_tokens=max_out,
                                temperature=config.get("generate", {}).get("temperature"),
                                model=model, doc_id=doc_id, chapter_id=chapter_id,
                                task_id=task_id, budget=budget)
@@ -97,9 +100,15 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
             return payload
         except SchemaViolation as exc:
             errors.append(str(exc.message))
+            hint = f"上一次输出校验失败：{exc.message}。请修正后重新输出完整 JSON。"
+            if "quote" in exc.message:
+                hint += ("（quote 必须逐字照抄锚点原文的连续片段，"
+                         "不得改写、翻译、加省略号或补标点；可从原文截取 ≤300 字。）")
+            if "不是合法 JSON" in exc.message or "缺少必填字段" in exc.message:
+                hint += "（输出必须是单个完整 JSON 对象，禁止 markdown 代码围栏与截断。）"
             messages = messages[:2] + [
                 {"role": "assistant", "content": json.dumps(resp.get("output"), ensure_ascii=False)[:4000]},
-                {"role": "user", "content": f"上一次输出校验失败：{exc.message}。请修正后重新输出 JSON。"},
+                {"role": "user", "content": hint},
             ]
     return {"_temp_id": spec["temp_id"], "_status": "failed", "_errors": errors,
             "content": "", "content_format": "md_latex", "tags": [],
