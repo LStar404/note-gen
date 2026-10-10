@@ -90,6 +90,17 @@ def reindex_doc(layout: Layout, doc_id: str, vec_dim: int | None = None) -> dict
                 for a in anchors:
                     conn.execute("INSERT INTO anchors_fts(rowid, content) SELECT rowid, content FROM anchors WHERE anchor_id=?",
                                  (a["anchor_id"],))
+            # 点查映射同步（6.4：block_id/anchor_id -> doc_id，每次提交/重建时更新）
+            try:
+                from src.db.runtime import get_runtime
+
+                get_runtime(layout.runtime_db).sync_doc_map(
+                    doc_id,
+                    [b["id"] for b in store.all_block_rows(include_deleted=True)],
+                    [a["anchor_id"] for a in anchors])
+            except Exception:
+                pass
+
             source_hash = canonical_json({
                 "anchors": len(anchors), "blocks": len(blocks),
                 "revision": manifest.get("data_revision")})

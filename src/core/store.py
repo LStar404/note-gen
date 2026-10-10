@@ -43,10 +43,34 @@ def sort_blocks(rows: Iterable[dict]) -> list[dict]:
     return sorted(rows, key=lambda r: (float(r.get("order", 0.0)), str(r.get("id", ""))))
 
 
+# 进程级行缓存：key=(root, doc_id) -> (data_revision, {"anchors": {...}, "blocks": {...}})
+# 只缓存"已提交状态"，每次读取先比对 manifest.data_revision，提交即失效（4.2.2 单写者）。
+_ROW_CACHE: dict[tuple[str, str], tuple[int, dict]] = {}
+
+
 class DocStore:
     def __init__(self, layout: Layout, doc_id: str):
         self.layout = layout
         self.doc_id = doc_id
+
+    @property
+    def _cache_key(self) -> tuple[str, str]:
+        return (str(self.layout.root), self.doc_id)
+
+    def _cached_rows(self, kind: str, chapter_id: str, revision: int, loader):
+        """同一 data_revision 内复用解析结果，避免每次请求重复解析 JSONL。"""
+        entry = _ROW_CACHE.get(self._cache_key)
+        if entry is None or entry[0] != revision:
+            entry = (revision, {"anchors": {}, "blocks": {}})
+            _ROW_CACHE[self._cache_key] = entry
+        bucket = entry[1].setdefault(kind, {})
+        if chapter_id not in bucket:
+            bucket[chapter_id] = loader()
+        return bucket[chapter_id]
+
+    @staticmethod
+    def _invalidate(layout: Layout, doc_id: str) -> None:
+        _ROW_CACHE.pop((str(layout.root), doc_id), None)
 
     # ------------------------------------------------------------------ 读取
     def manifest(self) -> dict:
@@ -71,7 +95,10 @@ class DocStore:
         raise NotFound(f"章节不存在: {chapter_id}")
 
     def anchor_rows(self, chapter_id: str) -> list[dict]:
-        return load_jsonl(self.layout.anchors(self.doc_id, chapter_id))
+        rev = self.data_revision()
+        rows = self._cached_rows("anchors", chapter_id, rev,
+                                 lambda: load_jsonl(self.layout.anchors(self.doc_id, chapter_id)))
+        return [dict(r) for r in rows]      # 返回副本，调用方就地修改不污染缓存
 
     def all_anchor_rows(self) -> list[dict]:
         rows: list[dict] = []
@@ -83,7 +110,10 @@ class DocStore:
         return {a["anchor_id"]: a for a in self.all_anchor_rows()}
 
     def block_rows(self, chapter_id: str, include_deleted: bool = False) -> list[dict]:
-        rows = load_jsonl(self.layout.blocks(self.doc_id, chapter_id))
+        rev = self.data_revision()
+        rows = self._cached_rows("blocks", chapter_id, rev,
+                                 lambda: load_jsonl(self.layout.blocks(self.doc_id, chapter_id)))
+        rows = [dict(r) for r in rows]      # 副本
         if not include_deleted:
             rows = [r for r in rows if not r.get("deleted_at")]
         return sort_blocks(rows)
@@ -251,6 +281,7 @@ class DocStore:
         result = commit_doc(self.layout, self.doc_id, base, changes,
                             manifest_updates=mutation.manifest_updates,
                             validate=validator, now=now)
+        self._invalidate(self.layout, self.doc_id)      # 提交后缓存失效
         return result.new_revision
 
     def recover(self) -> dict:

@@ -184,13 +184,18 @@ def _agent_edit(request: Request, body: dict, *, block_id: str | None = None,
 @router.get("/api/v1/anchors/{anchor_id}")
 def get_anchor(request: Request, anchor_id: str):
     st = state(request)
+    # 点查解析链（6.4）：runtime.doc_map → 命中则只读该 doc；未命中回退扫描
+    doc_id = _lookup_doc(st, "anchor", anchor_id)
+    if doc_id:
+        anchor = DocStore(st.layout, doc_id).anchors_by_id().get(anchor_id)
+        if anchor:
+            return anchor
     for doc_dir in sorted(st.layout.data_dir.glob("*/manifest.json")):
-        doc_id = doc_dir.parent.name
-        if not DOC_ID_RE.match(doc_id):
+        cand = doc_dir.parent.name
+        if not DOC_ID_RE.match(cand):
             continue
-        store = DocStore(st.layout, doc_id)
         try:
-            anchor = store.anchors_by_id().get(anchor_id)
+            anchor = DocStore(st.layout, cand).anchors_by_id().get(anchor_id)
         except Exception:
             continue
         if anchor:
@@ -198,14 +203,28 @@ def get_anchor(request: Request, anchor_id: str):
     raise NotFound(f"锚点不存在: {anchor_id}")
 
 
+def _lookup_doc(st, kind: str, key: str) -> str | None:
+    try:
+        from src.db.runtime import get_runtime
+
+        return get_runtime(st.layout.runtime_db).lookup_doc(kind, key)
+    except Exception:
+        return None
+
+
 def _find_store(st, block_id: str) -> DocStore:
-    """block_id → doc 映射：启动扫描 + 提交同步（6.4 点查解析链）。"""
+    """block_id → doc 映射（6.4）：runtime.doc_map 优先，未命中回退扫描。"""
+    doc_id = _lookup_doc(st, "block", block_id)
+    if doc_id:
+        store = DocStore(st.layout, doc_id)
+        if block_id in store.blocks_by_id(include_deleted=True):
+            return store
     for doc_dir in sorted(st.layout.data_dir.glob("*/manifest.json")):
-        doc_id = doc_dir.parent.name
-        if not DOC_ID_RE.match(doc_id):
+        cand = doc_dir.parent.name
+        if not DOC_ID_RE.match(cand):
             continue
         try:
-            store = DocStore(st.layout, doc_id)
+            store = DocStore(st.layout, cand)
             if block_id in store.blocks_by_id(include_deleted=True):
                 return store
         except Exception:

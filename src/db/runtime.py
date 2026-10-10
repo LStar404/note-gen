@@ -65,6 +65,15 @@ CREATE TABLE IF NOT EXISTS applied_operations (
   operation_id TEXT PRIMARY KEY, plan_id TEXT NOT NULL,
   result_json TEXT NOT NULL, created_at TEXT NOT NULL
 );
+
+-- 点查映射（规范 6.4）：block_id / anchor_id -> doc_id，随 reindex 同步
+CREATE TABLE IF NOT EXISTS doc_map (
+  kind TEXT NOT NULL,          -- block | anchor
+  key TEXT NOT NULL,
+  doc_id TEXT NOT NULL,
+  PRIMARY KEY (kind, key)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_doc_map_doc ON doc_map(doc_id);
 """
 
 _TASK_STATUSES = ("queued", "running", "succeeded", "partial", "failed", "cancelled", "interrupted")
@@ -234,6 +243,26 @@ class RuntimeDB:
             cur = self._conn.execute("DELETE FROM block_unlocks WHERE block_id=?", (block_id,))
             return cur.rowcount
 
+    # ---- 点查映射（block_id/anchor_id -> doc_id）----
+    def sync_doc_map(self, doc_id: str, block_ids: list[str], anchor_ids: list[str]) -> None:
+        """随 reindex 同步；同一 doc 的键全量替换，避免残留。"""
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM doc_map WHERE doc_id=?", (doc_id,))
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO doc_map(kind,key,doc_id) VALUES(?,?,?)",
+                [("block", b, doc_id) for b in block_ids] +
+                [("anchor", a, doc_id) for a in anchor_ids])
+
+    def lookup_doc(self, kind: str, key: str) -> str | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT doc_id FROM doc_map WHERE kind=? AND key=?", (kind, key)).fetchone()
+        return row[0] if row else None
+
+    def forget_doc(self, doc_id: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM doc_map WHERE doc_id=?", (doc_id,))
+
     # ---- 工具幂等 ----
     def applied_operation(self, operation_id: str) -> dict | None:
         with self._lock:
@@ -247,6 +276,17 @@ class RuntimeDB:
                 "INSERT OR IGNORE INTO applied_operations(operation_id,plan_id,result_json,created_at)"
                 " VALUES(?,?,?,?)",
                 (operation_id, plan_id, json.dumps(result, ensure_ascii=False), utc_now_iso()))
+
+
+_RUNTIME: dict[str, RuntimeDB] = {}
+
+
+def get_runtime(path: str | Path) -> RuntimeDB:
+    """进程内复用同一连接（单进程约束 10.4）。"""
+    key = str(Path(path).resolve())
+    if key not in _RUNTIME:
+        _RUNTIME[key] = RuntimeDB(key)
+    return _RUNTIME[key]
 
 
 def _task_dict(row: sqlite3.Row) -> dict:

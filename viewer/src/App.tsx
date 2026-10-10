@@ -8,6 +8,12 @@ import ReviewQueue from "./components/ReviewQueue";
 import { useStore } from "./state/store";
 
 export default function App() {
+  // 主题：跟随 localStorage，首次进入用浅色
+  useEffect(() => {
+    const saved = localStorage.getItem("note-gen-theme") || "light";
+    document.documentElement.setAttribute("data-theme", saved);
+  }, []);
+
   const toast = useStore((s) => s.toast);
   const blocks = useStore((s) => s.blocks);
   const selectedBlockId = useStore((s) => s.selectedBlockId);

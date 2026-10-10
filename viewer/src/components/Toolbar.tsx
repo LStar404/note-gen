@@ -93,8 +93,26 @@ export default function Toolbar() {
     }
   };
 
+  const [theme, setTheme] = useState<string>(
+    () => localStorage.getItem("note-gen-theme") || "light"
+  );
+
+  const toggleTheme = () => {
+    const next = theme === "light" ? "dark" : "light";
+    setTheme(next);
+    localStorage.setItem("note-gen-theme", next);
+    document.documentElement.setAttribute("data-theme", next);
+  };
+
   return (
     <header className="toolbar">
+      <div className="brand">
+        <span className="logo">📒</span>
+        <span>note-gen</span>
+      </div>
+      <button className="icon" onClick={toggleTheme} title="切换明暗主题">
+        {theme === "light" ? "🌙" : "☀️"}
+      </button>
       <select
         value={docId ?? ""}
         onChange={(e) => {
@@ -120,7 +138,7 @@ export default function Toolbar() {
         ))}
       </select>
 
-      <label className="file-button">
+      <label className="file-button primary">
         导入 PDF
         <input type="file" accept="application/pdf" hidden onChange={(e) => void importPdf(e.target.files?.[0] ?? null)} />
       </label>
