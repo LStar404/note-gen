@@ -7,6 +7,49 @@ from typing import Any, Iterable
 
 from src.core.block_types import RELATION_CN, get_type
 
+# 输出语言标签（generate.output_language；导出与徽标文案）
+LANG_LABELS: dict[str, dict] = {
+    "zh": {
+        "types": {"definition": "定义", "theorem": "定理", "motivation": "动机",
+                  "figure": "图示", "link": "延伸链接", "contribution": "贡献",
+                  "method": "方法", "experiment": "实验"},
+        "relations": RELATION_CN,
+        "synthesis": "（AI 归纳）", "toc": "目录", "source": "来源",
+        "badge": "📖p.{page} · {rel}",
+    },
+    "en": {
+        "types": {"definition": "Definition", "theorem": "Theorem", "motivation": "Motivation",
+                  "figure": "Figure", "link": "Link", "contribution": "Contribution",
+                  "method": "Method", "experiment": "Experiment"},
+        "relations": {"defines": "defines", "states": "states", "proves": "proves",
+                      "motivates": "motivates", "illustrates": "illustrates",
+                      "summarizes": "summarizes"},
+        "synthesis": " (AI synthesis)", "toc": "Contents", "source": "Source",
+        "badge": "📖p.{page} · {rel}",
+    },
+    "ja": {
+        "types": {"definition": "定義", "theorem": "定理", "motivation": "動機",
+                  "figure": "図", "link": "リンク", "contribution": "貢献",
+                  "method": "方法", "experiment": "実験"},
+        "relations": {"defines": "定義", "states": "主張", "proves": "証明",
+                      "motivates": "動機", "illustrates": "図示", "summarizes": "要約"},
+        "synthesis": "（AI による要約）", "toc": "目次", "source": "出典",
+        "badge": "📖p.{page} · {rel}",
+    },
+}
+
+TYPE_ICONS = {"definition": "📌", "theorem": "📘", "motivation": "💡", "figure": "🖼",
+              "link": "🔗", "contribution": "🎯", "method": "🧭", "experiment": "📊"}
+
+
+def labels_for(lang: str = "zh", *, encoding: str = "utf-8") -> dict:
+    """导出标签；非 UTF-8 编码时去图标（GBK/Big5 无法表示 emoji）。"""
+    labels = dict(LANG_LABELS.get(lang, LANG_LABELS["zh"]))
+    utf8 = (encoding or "utf-8").lower().startswith("utf-8")
+    labels["icons"] = TYPE_ICONS if utf8 else {}
+    return labels
+
+
 FIG_PLACEHOLDER = re.compile(r"^!\[(fig_[0-9]{8})\]$")
 FIG_ANY = re.compile(r"!\[(fig_[0-9]{8})\]")
 CITE_PATTERN = re.compile(r"\[(\d{1,4})\]")
@@ -24,18 +67,22 @@ def live_blocks(blocks: Iterable[dict]) -> list[dict]:
     return sorted([b for b in blocks if not b.get("deleted_at")], key=block_order_key)
 
 
-def source_badges(block: dict, anchors_by_id: dict[str, dict], *, mode: str = "md") -> str:
+def source_badges(block: dict, anchors_by_id: dict[str, dict], *, mode: str = "md",
+                  labels: dict | None = None) -> str:
+    labels = labels or LANG_LABELS["zh"]
+    rels = labels.get("relations", RELATION_CN)
+    tpl = labels.get("badge", "📖p.{page} · {rel}")
     parts = []
     for src in block.get("sources", []):
         anchor = anchors_by_id.get(src["anchor_id"], {})
         page = anchor.get("page", "?")
-        label = f"📖p.{page} · {RELATION_CN.get(src.get('relation'), src.get('relation', ''))}"
+        label = tpl.format(page=page, rel=rels.get(src.get("relation"), src.get("relation", "")))
         if mode == "md":
             parts.append(f"[{label}](note://anchor/{src['anchor_id']}?page={page})")
         else:
             parts.append(f"（{label}）")
     if block.get("basis") == "synthesis":
-        parts.append("（AI 归纳）" if mode != "md" else "（AI 归纳）")
+        parts.append(labels.get("synthesis", "（AI 归纳）"))
     return " ".join(parts)
 
 

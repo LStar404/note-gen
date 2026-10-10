@@ -343,6 +343,89 @@ def docling_extract(req: dict) -> dict:
     }
 
 
+# --------------------------------------------------------------------------- OCR（纯图片页）
+def ocr_pages(req: dict) -> dict:
+    """纯图片/扫描页 OCR（5.1.1 OCR 分支）：渲染页图 -> rapidocr 识别 -> 版面行块。
+
+    bbox 用图像尺寸与页面 view_box 自标定换算到 PDF 用户空间（顶左像素 -> 底左点）。
+    """
+    try:
+        import pypdfium2 as pdfium
+        from rapidocr import RapidOCR
+    except Exception as exc:
+        return {"ok": False, "parser": "ocr", "error": f"OCR 依赖不可用: {exc}"}
+
+    pdf_path = req["pdf_path"]
+    pages_meta = req.get("pages_meta") or _pages_meta_from_pdf(pdf_path)
+    targets = [int(p) for p in req.get("pages", []) if int(p) - 1 < len(pages_meta)]
+    dpi = float(req.get("dpi", 150))
+    scale = dpi / 72.0
+
+    try:
+        engine = RapidOCR()
+    except Exception as exc:
+        return {"ok": False, "parser": "ocr", "error": f"rapidocr 初始化失败: {exc}"}
+
+    doc = pdfium.PdfDocument(pdf_path)
+    out_pages = []
+    warnings: list[str] = []
+    for page_no in targets:
+        meta = pages_meta[page_no - 1]
+        vb = meta["view_box"]
+        entry = {"page": page_no, "status": "ok", "blocks": []}
+        try:
+            page = doc[page_no - 1]
+            bitmap = page.render(scale=scale)
+            image = bitmap.to_pil()
+            width_px, height_px = image.size
+            result = engine(image)
+            txts = getattr(result, "txts", None)
+            boxes = getattr(result, "boxes", None)
+            if txts is None and isinstance(result, (list, tuple)) and result:
+                first = result[0]
+                boxes = getattr(first, "boxes", None) or (first[0] if isinstance(first, (list, tuple)) else None)
+                txts = getattr(first, "txts", None) or (first[1] if isinstance(first, (list, tuple)) else None)
+            if not txts:
+                entry["status"] = "blank"
+                out_pages.append(entry)
+                continue
+            sx = (vb[2] - vb[0]) / max(1.0, float(width_px))
+            sy = (vb[3] - vb[1]) / max(1.0, float(height_px))
+            for text, box in zip(txts, boxes):
+                text = str(text or "").strip()
+                if not text:
+                    continue
+                xs = [float(pt[0]) for pt in box]
+                ys = [float(pt[1]) for pt in box]
+                pdf_bbox = [vb[0] + min(xs) * sx, vb[3] - max(ys) * sy,
+                            vb[0] + max(xs) * sx, vb[3] - min(ys) * sy]
+                entry["blocks"].append({"type": "paragraph", "level": 0, "text": text,
+                                        "bbox": pdf_bbox, "confidence": None})
+            if not entry["blocks"]:
+                entry["status"] = "blank"
+        except Exception as exc:
+            entry["status"] = "failed"
+            entry["error"] = str(exc)[:200]
+            warnings.append(f"page {page_no}: {exc}")
+        out_pages.append(entry)
+
+    return {
+        "ok": True,
+        "parser": "ocr",
+        "version": "rapidocr",
+        "pages": out_pages,
+        "coordinate": {
+            "source_space": "ocr_pixels_topleft",
+            "source_to_pdf": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            "view_box": pages_meta[0]["view_box"] if pages_meta else [0, 0, 612, 792],
+            "user_unit": 1.0,
+            "rotation": 0,
+            "derivation": "OCR 行框（渲染像素，顶左原点）按图像尺寸与页面 view_box 自标定换算",
+        },
+        "warnings": warnings,
+    }
+
+
 # --------------------------------------------------------------------------- pix2text
 def pix2text_recognize(req: dict) -> dict:
     """公式 OCR 兜底（5.1.3）：对裁剪图识别 LaTeX。"""
@@ -373,6 +456,7 @@ def main() -> int:
         "probe": probe,
         "marker": marker_extract,
         "docling": docling_extract,
+        "ocr_pages": ocr_pages,
         "pix2text": pix2text_recognize,
     }
     handler = handlers.get(mode)

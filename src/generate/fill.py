@@ -11,7 +11,7 @@ from src.core.errors import SchemaViolation
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
-from .prompts import FILL_PROMPT, SYSTEM_PROMPT, build_fill_schema
+from .prompts import FILL_PROMPT, SYSTEM_PROMPT, build_fill_schema, language_instruction
 from .validate_retry import check_latex, parse_json_output, validate_fill_payload
 
 
@@ -55,7 +55,7 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
                                    ensure_ascii=False),
         source_fulltexts=fulltexts,
         fill_schema=json.dumps(schema, ensure_ascii=False),
-    )
+    ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
     max_in = int(config.get("generate", {}).get("fill_max_in", 8000))
     if estimate_tokens(prompt) > max_in:

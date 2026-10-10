@@ -87,7 +87,8 @@ def rewrite_figures_plain(content: str, figure_paths: dict[str, str],
 
 
 def export_anki(store: DocStore, chapter_id: str | None = None, *, out_dir: Path,
-                deck_name: str | None = None) -> Path:
+                deck_name: str | None = None, lang: str = "zh",
+                encoding: str = "utf-8") -> Path:
     cards = collect_cards(store, chapter_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix = f"-{chapter_id}" if chapter_id else ""
@@ -96,7 +97,7 @@ def export_anki(store: DocStore, chapter_id: str | None = None, *, out_dir: Path
     try:
         import genanki
     except Exception:
-        return _export_csv(store, cards, out_dir, suffix)
+        return _export_csv(store, cards, out_dir, suffix, encoding=encoding)
 
     model_id = _stable_id("note-gen-model", "v1")
     deck_id = _stable_id("note-gen-deck", store.doc_id, chapter_id or "_book")
@@ -126,10 +127,11 @@ def export_anki(store: DocStore, chapter_id: str | None = None, *, out_dir: Path
     return out
 
 
-def _export_csv(store: DocStore, cards: list[dict], out_dir: Path, suffix: str) -> Path:
+def _export_csv(store: DocStore, cards: list[dict], out_dir: Path, suffix: str,
+                encoding: str = "utf-8") -> Path:
     """genanki 不可用时的回退：可导入 CSV（front,back,tags）。"""
     out = out_dir / f"{store.doc_id}{suffix}-anki.csv"
-    with out.open("w", encoding="utf-8", newline="") as fh:
+    with out.open("w", encoding=encoding, errors="replace", newline="") as fh:
         writer = csv.writer(fh)
         writer.writerow(["front", "back", "tags", "source"])
         for card in cards:

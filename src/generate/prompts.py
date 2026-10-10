@@ -52,6 +52,15 @@ AGENT_SYSTEM_PROMPT = SYSTEM_PROMPT + """
 
 SOURCE_RELATION_ENUM = ["defines", "states", "proves", "motivates", "illustrates", "summarizes"]
 
+OUTPUT_LANGUAGES = {"zh": "简体中文", "en": "English", "ja": "日本語"}
+
+
+def language_instruction(lang: str | None) -> str:
+    """输出语言约束（generate.output_language）：title/content 使用该语言，公式保持 LaTeX。"""
+    name = OUTPUT_LANGUAGES.get((lang or "zh").lower(), "简体中文")
+    return (f"输出语言：{name}。所有块的 title 与 content 必须使用{name}输出；"
+            f"数学公式保持 LaTeX 不翻译；引文 quote 保持原文。")
+
 
 def build_outline_schema(profile: str = "textbook") -> dict:
     return {

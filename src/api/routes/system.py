@@ -62,6 +62,57 @@ def update_routes(request: Request, body: dict):
     return {"routes": st.config.get("generate", {}).get("models", {})}
 
 
+@router.get("/api/v1/settings")
+def get_settings(request: Request):
+    """应用设置（解析器/OCR/输出语言/导出编码/生成参数）。"""
+    st = state(request)
+    cfg = st.config
+    return {
+        "parser": cfg.get("parser", {}),
+        "generate": {k: v for k, v in (cfg.get("generate", {}) or {}).items() if k != "models"},
+        "export": cfg.get("export", {}),
+        "match": cfg.get("match", {}),
+        "history": cfg.get("history", {}),
+        "embedding": cfg.get("embedding", {}),
+        "options": {
+            "parsers": ["auto", "marker", "docling", "pypdf"],
+            "ocr_modes": ["auto", "force", "off"],
+            "languages": ["zh", "en", "ja"],
+            "encodings": ["utf-8", "utf-8-sig", "gbk", "big5"],
+        },
+    }
+
+
+@router.put("/api/v1/settings")
+def put_settings(request: Request, body: dict):
+    """更新应用设置（原子保存 config.yaml，不涉及密钥）。"""
+    from src.core.config import (ENCODINGS, OUTPUT_LANGUAGES, normalize_settings,
+                                 save_config)
+
+    st = state(request)
+    cfg = st.config
+    for section in ("parser", "generate", "export", "match", "history", "embedding"):
+        if section in body and isinstance(body[section], dict):
+            cfg[section] = {**(cfg.get(section) or {}), **body[section]}
+
+    parser = cfg.get("parser", {})
+    if parser.get("default") not in ("auto", "marker", "docling", "pypdf"):
+        raise InputError(f"不支持的解析器: {parser.get('default')}")
+    if parser.get("ocr_mode") not in ("auto", "force", "off"):
+        raise InputError(f"不支持的 ocr_mode: {parser.get('ocr_mode')}")
+    cfg = normalize_settings(cfg)
+    if cfg["export"]["encoding"] not in ENCODINGS:
+        raise InputError(f"不支持的编码: {cfg['export']['encoding']}")
+    if cfg["generate"]["output_language"] not in OUTPUT_LANGUAGES:
+        raise InputError(f"不支持的输出语言: {cfg['generate']['output_language']}")
+
+    save_config(st.root, cfg)
+    st.reload_config()
+    return {"settings": {"parser": st.config.get("parser"),
+                         "generate": st.config.get("generate"),
+                         "export": st.config.get("export")}}
+
+
 @router.get("/api/v1/usage")
 def usage(request: Request, doc_id: str | None = None, days: int = 30):
     st = state(request)

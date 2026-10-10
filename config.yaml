@@ -19,6 +19,10 @@ generate:
   concurrency: 2
   max_cost_per_chapter: 0.0   # 单章成本上限（美元，0=不限；5.3.5）
   temperature: 0.2          # prompt_version 不在此配置：唯一权威是 prompts.py 顶部常量（5.3.4）
+generate:
+  output_language: zh       # zh | en | ja  生成笔记与导出标签语言
+export:
+  encoding: utf-8           # utf-8 | utf-8-sig | gbk | big5  导出文件编码
 embedding:
   provider: none        # none | onnx_bge | hashed_lexical（后者仅为链路回退，非语义向量）
   model_dir: null       # onnx_bge 模型目录（需含 model.onnx + tokenizer.json）

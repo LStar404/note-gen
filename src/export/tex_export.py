@@ -8,7 +8,8 @@ from pathlib import Path
 from src.core.block_types import get_type
 from src.core.store import DocStore
 from src.export.md_export import _safe_write
-from src.export.render import figure_index, heading_line, live_blocks, rewrite_citations, source_badges
+from src.export.render import (figure_index, heading_line, labels_for, live_blocks,
+                               rewrite_citations, source_badges)
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 B = chr(92)   # 反斜杠，避免转义歧义
@@ -103,7 +104,9 @@ def md_block_to_tex(content: str) -> str:
     return "\n".join(out)
 
 
-def export_tex_chapter(store: DocStore, chapter_id: str, *, out_dir: Path) -> Path:
+def export_tex_chapter(store: DocStore, chapter_id: str, *, out_dir: Path,
+                       lang: str = "zh", encoding: str = "utf-8") -> Path:
+    labels = labels_for(lang, encoding=encoding)
     manifest = store.manifest()
     chapter = store.chapter(chapter_id)
     anchors_by_id = {a["anchor_id"]: a for a in store.all_anchor_rows()}
@@ -133,7 +136,7 @@ def export_tex_chapter(store: DocStore, chapter_id: str, *, out_dir: Path) -> Pa
             content = content.replace(f"![{fig_id}]",
                                       f"![{figure_captions.get(fig_id, fig_id)}]({path})")
         rendered = md_block_to_tex(content)
-        badges = source_badges(block, anchors_by_id, mode="tex")
+        badges = source_badges(block, anchors_by_id, mode="tex", labels=labels)
         if env:
             body.append(B + "begin{" + env + "}[" + title + "]")
             body.append(rendered)
@@ -151,20 +154,24 @@ def export_tex_chapter(store: DocStore, chapter_id: str, *, out_dir: Path) -> Pa
         body.append("")
 
     body.append(B + "end{document}")
-    return _safe_write(out_dir, f"{chapter_id}.tex", preamble + "\n" + "\n".join(body) + "\n")
+    return _safe_write(out_dir, f"{chapter_id}.tex", preamble + "\n" + "\n".join(body) + "\n",
+                       encoding=encoding)
 
 
-def export_tex_book(store: DocStore, *, out_dir: Path) -> Path:
+def export_tex_book(store: DocStore, *, out_dir: Path, lang: str = "zh",
+                    encoding: str = "utf-8") -> Path:
     manifest = store.manifest()
     preamble = (TEMPLATE_DIR / "tex_preamble.tex").read_text(encoding="utf-8")
     parts = [B + "tableofcontents", ""]
     tmp_dir = out_dir / "_tex_tmp"
     for ch in manifest.get("chapters", []):
         parts.append(B + "section{" + tex_escape(ch["title"]) + "}")
-        path = export_tex_chapter(store, ch["chapter_id"], out_dir=tmp_dir)
+        path = export_tex_chapter(store, ch["chapter_id"], out_dir=tmp_dir,
+                                  lang=lang, encoding=encoding)
         text = path.read_text(encoding="utf-8")
         start = text.index(B + "begin{document}") + len(B + "begin{document}")
         end = text.rindex(B + "end{document}")
         parts.append(text[start:end])
     return _safe_write(out_dir, "_book.tex",
-                       preamble + "\n" + "\n".join(parts) + "\n" + B + "end{document}\n")
+                       preamble + "\n" + "\n".join(parts) + "\n" + B + "end{document}\n",
+                       encoding=encoding)

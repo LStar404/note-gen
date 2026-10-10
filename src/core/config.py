@@ -28,12 +28,27 @@ DEFAULTS: dict[str, Any] = {
         "concurrency": 2,
         "max_cost_per_chapter": 0.0,
         "temperature": 0.2,
+        "output_language": "zh",      # zh | en | ja  生成笔记与导出标签语言
     },
+    "export": {"encoding": "utf-8"},
     "embedding": {"provider": "none", "model_dir": None, "dim": 1024, "threshold": 0.55},
     "cache": {"dir": "cache/gen"},
     "match": {"contain_ratio": 0.8, "cover_ratio": 0.5, "top_k": 8},
     "history": {"keep_recent": 50},
 }
+
+
+ENCODINGS = ("utf-8", "utf-8-sig", "gbk", "big5")
+OUTPUT_LANGUAGES = ("zh", "en", "ja")
+
+
+def normalize_settings(cfg: dict) -> dict:
+    """校验并归一化可选项（10.2 字段即规范）。"""
+    enc = ((cfg.get("export") or {}).get("encoding") or "utf-8").lower()
+    cfg.setdefault("export", {})["encoding"] = enc if enc in ENCODINGS else "utf-8"
+    lang = ((cfg.get("generate") or {}).get("output_language") or "zh").lower()
+    cfg.setdefault("generate", {})["output_language"] = lang if lang in OUTPUT_LANGUAGES else "zh"
+    return cfg
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -55,6 +70,7 @@ def load_config(root: str | Path) -> dict:
             raise ValueError(f"{path} 顶层必须是映射")
         data = loaded
     cfg = _deep_merge(DEFAULTS, data)
+    cfg = normalize_settings(cfg)
     cfg["_root"] = str(Path(root).resolve())
     return cfg
 

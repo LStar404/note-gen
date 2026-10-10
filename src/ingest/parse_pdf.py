@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -198,6 +199,71 @@ def _spans_to_blocks(spans: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Marker / Docling 适配器（默认候选，见 5.1 选型表）：经 parser_workers 子进程运行重型依赖
 # ---------------------------------------------------------------------------
+def resolve_worker_python(explicit: str | None = None) -> str:
+    """worker 解释器：显式配置 > .venv-parsers > 当前解释器（ADR D31）。"""
+    if explicit:
+        return explicit
+    root = Path(__file__).resolve().parents[2]
+    for cand in (root / ".venv-parsers" / "Scripts" / "python.exe",
+                 root / ".venv-parsers" / "bin" / "python"):
+        if cand.exists():
+            return str(cand)
+    return sys.executable
+
+
+def run_worker(mode: str, payload: dict, python: str | None = None) -> dict:
+    """调用 parser_workers 子进程：结果走独立文件，stdout 只作诊断。"""
+    import subprocess
+    import tempfile
+
+    worker = Path(__file__).resolve().parent / "parser_workers.py"
+    with tempfile.TemporaryDirectory() as td:
+        out_file = Path(td) / "worker_result.json"
+        req = dict(payload)
+        req["output_path"] = str(out_file)
+        proc = subprocess.run(
+            [resolve_worker_python(python), str(worker), mode],
+            input=json.dumps(req, ensure_ascii=False).encode("utf-8"),
+            capture_output=True,
+            cwd=str(Path(__file__).resolve().parents[2]),
+            timeout=3600,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        )
+        if out_file.exists():
+            return json.loads(out_file.read_text(encoding="utf-8"))
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or b"").decode("utf-8", "replace")[-800:]
+            raise PipelineError(f"worker[{mode}] 退出码 {proc.returncode}: {tail}")
+        return _decode_worker_stdout(mode, proc.stdout, proc.stderr)
+
+
+def _decode_worker_stdout(mode: str, stdout: bytes, stderr: bytes | None = None) -> dict:
+    for enc in ("utf-8", "gbk", "latin-1"):
+        try:
+            text = stdout.decode(enc)
+        except Exception:
+            continue
+        start, end = text.find("{"), text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start:end + 1])
+            except Exception:
+                continue
+    tail = (stderr or stdout or b"").decode("utf-8", "replace")[-800:]
+    raise PipelineError(f"worker[{mode}] 输出非法 JSON: {tail}")
+
+
+def ocr_pages_via_worker(pdf_path: str | Path, pages: list[int], pages_meta: list[dict],
+                         *, python: str | None = None, dpi: int = 150) -> dict | None:
+    """纯图片页 OCR（尽力而为）：失败返回 None 并由调用方记警告。"""
+    try:
+        return run_worker("ocr_pages", {"pdf_path": str(Path(pdf_path).resolve()),
+                                        "pages": pages, "pages_meta": pages_meta,
+                                        "dpi": dpi}, python=python)
+    except Exception:
+        return None
+
+
 class WorkerAdapter(ParserAdapter):
     """在独立解释器（默认 .venv-parsers）中运行的解析器适配器（ADR D31）。"""
 
@@ -213,61 +279,8 @@ class WorkerAdapter(ParserAdapter):
                 detail={"probe": modules})
         self.version = str(modules.get(self.name))
 
-    @staticmethod
-    def _resolve_python(explicit: str | None) -> str:
-        """worker 解释器：显式配置 > .venv-parsers > 当前解释器（ADR D31）。"""
-        import sys
-
-        if explicit:
-            return explicit
-        root = Path(__file__).resolve().parents[2]
-        for cand in (root / ".venv-parsers" / "Scripts" / "python.exe",
-                     root / ".venv-parsers" / "bin" / "python"):
-            if cand.exists():
-                return str(cand)
-        return sys.executable
-
     def _call(self, mode: str, payload: dict) -> dict:
-        """调用 worker：结果走独立文件，stdout 只作诊断（第三方日志可能污染它）。"""
-        import subprocess
-        import tempfile
-
-        worker = Path(__file__).resolve().parent / "parser_workers.py"
-        python = self._resolve_python(self.python)
-        with tempfile.TemporaryDirectory() as td:
-            out_file = Path(td) / "worker_result.json"
-            req = dict(payload)
-            req["output_path"] = str(out_file)
-            proc = subprocess.run(
-                [python, str(worker), mode],
-                input=json.dumps(req, ensure_ascii=False).encode("utf-8"),
-                capture_output=True,
-                cwd=str(Path(__file__).resolve().parents[2]),
-                timeout=3600,
-                env={**__import__("os").environ, "PYTHONIOENCODING": "utf-8"},
-            )
-            if out_file.exists():
-                return json.loads(out_file.read_text(encoding="utf-8"))
-            if proc.returncode != 0:
-                tail = (proc.stderr or proc.stdout or b"").decode("utf-8", "replace")[-800:]
-                raise PipelineError(f"{self.name} worker 退出码 {proc.returncode}: {tail}")
-            return self._decode_stdout(proc.stdout, proc.stderr)
-
-    def _decode_stdout(self, stdout: bytes, stderr: bytes | None = None) -> dict:
-        """回退：从可能被污染的 stdout 中提取 JSON。"""
-        for enc in ("utf-8", "gbk", "latin-1"):
-            try:
-                text = stdout.decode(enc)
-            except Exception:
-                continue
-            start, end = text.find("{"), text.rfind("}")
-            if start >= 0 and end > start:
-                try:
-                    return json.loads(text[start:end + 1])
-                except Exception:
-                    continue
-        tail = (stderr or stdout or b"").decode("utf-8", "replace")[-800:]
-        raise PipelineError(f"{self.name} worker 输出非法 JSON: {tail}")
+        return run_worker(mode, payload, python=self.python)
 
     def parse_document(self, pdf_path: str | Path, pages_meta: list[dict] | None = None) -> dict:
         """整书解析：返回 {pages:[...], coordinate:{...}, warnings:[...]}。"""
@@ -344,10 +357,12 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
         shutil.rmtree(pages_dir)
     pages_dir.mkdir(parents=True, exist_ok=True)
 
-    ocr_engine = FormulaOCR() if ocr else None
+    ocr_engine = FormulaOCR(python=parser_python) if ocr else None
+    ocr_mode = ((config or {}).get("parser", {}) or {}).get("ocr_mode", "auto") or "auto"
     page_records: list[dict] = []
     failed = 0
     figure_seq = 0
+    ocr_pages_used = 0
 
     for i in range(n_pages):
         meta = _pdf_page_meta(reader.pages[i])
@@ -368,6 +383,15 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
             result.setdefault("meta", meta)
         view_box = meta["view_box"]
         blocks = result.get("blocks", [])
+        # 纯图片/扫描页：无文字层时按 ocr_mode 触发 OCR（5.1.1 OCR 分支）
+        if ocr_mode != "off" and (ocr_mode == "force" or not blocks):
+            ocr_out = ocr_pages_via_worker(pdf_path, [i + 1], pages_meta_all,
+                                           python=parser_python)
+            ocr_blocks = ((ocr_out or {}).get("pages") or [{}])[0].get("blocks", [])
+            if ocr_blocks:
+                blocks = ocr_blocks if not blocks else blocks + ocr_blocks
+                result["status"] = "ok"
+                ocr_pages_used += 1
         source_to_pdf = result.get("source_to_pdf", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
         source_space = result.get("source_space", "pdf_user_space")
 
@@ -443,7 +467,7 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
                    "config_hash": "sha256:" + hashlib.sha256(canonical_json({
                        "name": adapter.name, "version": adapter.version,
                        "profile": profile, "ocr": bool(ocr)}).encode("utf-8")).hexdigest()},
-        "ocr": bool(ocr),
+        "ocr": bool(ocr) or ocr_pages_used > 0,
         "data_revision": 1,
         "pages": page_records,
         "collision_map": {},

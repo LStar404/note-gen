@@ -11,8 +11,8 @@ from jinja2 import Template
 
 from src.core.paths import Layout
 from src.core.store import DocStore
-from src.export.render import (figure_index, heading_line, live_blocks, rewrite_citations,
-                               rewrite_figures, source_badges)
+from src.export.render import (figure_index, labels_for, heading_line, live_blocks,
+                               rewrite_citations, rewrite_figures, source_badges)
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
@@ -21,7 +21,7 @@ def _registry_path(out_dir: Path) -> Path:
     return out_dir / ".export_registry.json"
 
 
-def _safe_write(out_dir: Path, rel: str, content: str) -> Path:
+def _safe_write(out_dir: Path, rel: str, content: str, encoding: str = "utf-8") -> Path:
     """导出通用规则 1：仅覆盖登记 hash 一致的文件；人工改动生成副本并提示。"""
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / rel
@@ -33,7 +33,8 @@ def _safe_write(out_dir: Path, rel: str, content: str) -> Path:
         if registry.get(rel) and registry[rel] != cur_hash:
             path = out_dir / (Path(rel).stem + ".exported" + Path(rel).suffix)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8", newline="\n")
+    # 导出编码（export.encoding）：utf-8 / utf-8-sig / gbk / big5
+    path.write_bytes(content.encode(encoding, errors="replace"))
     registry[str(rel)] = new_hash
     registry_path.write_text(json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
@@ -41,7 +42,9 @@ def _safe_write(out_dir: Path, rel: str, content: str) -> Path:
 
 def _block_lines(store: DocStore, blocks: list[dict], anchors_by_id: dict[str, dict],
                  figure_paths: dict[str, str], figure_captions: dict[str, str],
-                 refs_by_num: dict[int, dict], *, mode: str = "md") -> list[str]:
+                 refs_by_num: dict[int, dict], *, mode: str = "md",
+                 labels: dict | None = None) -> list[str]:
+    labels = labels or labels_for("zh")
     lines: list[str] = []
     prev_heading = object()
     for block in blocks:
@@ -54,9 +57,8 @@ def _block_lines(store: DocStore, blocks: list[dict], anchors_by_id: dict[str, d
                 lines.append(h)
                 lines.append("")
             prev_heading = block.get("heading_anchor_id")
-        icon = {"definition": "📌", "theorem": "📘", "motivation": "💡",
-                "figure": "🖼", "link": "🔗"}.get(block.get("type"), "📝")
-        badges = source_badges(block, anchors_by_id, mode=mode)
+        icon = labels.get("icons", {}).get(block.get("type"), "")
+        badges = source_badges(block, anchors_by_id, mode=mode, labels=labels)
         lines.append(f"## {icon} {block.get('title', '')} {badges}".rstrip())
         lines.append("")
         content = rewrite_figures(block.get("content", ""), doc_id=store.doc_id,
@@ -71,7 +73,9 @@ def _block_lines(store: DocStore, blocks: list[dict], anchors_by_id: dict[str, d
     return lines
 
 
-def export_md_chapter(store: DocStore, chapter_id: str, *, out_dir: Path) -> Path:
+def export_md_chapter(store: DocStore, chapter_id: str, *, out_dir: Path,
+                      lang: str = "zh", encoding: str = "utf-8") -> Path:
+    labels = labels_for(lang, encoding=encoding)
     manifest = store.manifest()
     chapter = store.chapter(chapter_id)
     anchors_by_id = {a["anchor_id"]: a for a in store.all_anchor_rows()}
@@ -84,16 +88,18 @@ def export_md_chapter(store: DocStore, chapter_id: str, *, out_dir: Path) -> Pat
                                  generated_at=manifest.get("updated_at"),
                                  block_count=len(blocks))
     body = "\n".join(_block_lines(store, blocks, anchors_by_id, figure_paths,
-                                   figure_captions, refs_by_num))
-    return _safe_write(out_dir, f"{chapter_id}.md", head + "\n" + body + "\n")
+                                   figure_captions, refs_by_num, labels=labels))
+    return _safe_write(out_dir, f"{chapter_id}.md", head + "\n" + body + "\n", encoding=encoding)
 
 
-def export_md_book(store: DocStore, *, out_dir: Path) -> Path:
+def export_md_book(store: DocStore, *, out_dir: Path, lang: str = "zh",
+                   encoding: str = "utf-8") -> Path:
     """整书导出 = 各章合并 + 目录页（由各章 h1 heading 锚点生成）+ 跨章 links 统一解析。"""
+    labels = labels_for(lang, encoding=encoding)
     manifest = store.manifest()
     anchors_by_id = {a["anchor_id"]: a for a in store.all_anchor_rows()}
     parts: list[str] = [f"# {manifest.get('title', store.doc_id)}", ""]
-    toc = ["## 目录", ""]
+    toc = ["## " + labels.get("toc", "目录"), ""]
     for ch in manifest.get("chapters", []):
         toc.append(f"- [{ch['title']}](#{ch['chapter_id']})")
     parts.extend(toc)
@@ -107,12 +113,14 @@ def export_md_book(store: DocStore, *, out_dir: Path) -> Path:
         refs_by_num = {int(r["num"]): r for r in store.ref_rows()}
         blocks = live_blocks(store.block_rows(ch["chapter_id"]))
         parts.extend(_block_lines(store, blocks, anchors_by_id, figure_paths,
-                                  figure_captions, refs_by_num))
-    return _safe_write(out_dir, "_book.md", "\n".join(parts) + "\n")
+                                  figure_captions, refs_by_num, labels=labels))
+    return _safe_write(out_dir, "_book.md", "\n".join(parts) + "\n", encoding=encoding)
 
 
-def export_md_obsidian(store: DocStore, chapter_id: str | None, *, out_dir: Path) -> Path:
+def export_md_obsidian(store: DocStore, chapter_id: str | None, *, out_dir: Path,
+                       lang: str = "zh", encoding: str = "utf-8") -> Path:
     """Obsidian 兼容导出（9.6 规则 5）：块级独立文件 + wikilink + assets 复制。"""
+    labels = labels_for(lang, encoding=encoding)
     manifest = store.manifest()
     root = out_dir / store.doc_id
     anchors_by_id = {a["anchor_id"]: a for a in store.all_anchor_rows()}
@@ -127,7 +135,7 @@ def export_md_obsidian(store: DocStore, chapter_id: str | None, *, out_dir: Path
         index_lines = [f"# {store.chapter(ch)['title']}", ""]
         for block in blocks:
             bid = block["id"]
-            badges = source_badges(block, anchors_by_id, mode="obsidian")
+            badges = source_badges(block, anchors_by_id, mode="obsidian", labels=labels)
             tags = " ".join(f"#{t}" for t in block.get("tags", []))
             front = ("---\n"
                      f"title: {json.dumps(block.get('title', ''), ensure_ascii=False)}\n"
@@ -148,9 +156,9 @@ def export_md_obsidian(store: DocStore, chapter_id: str | None, *, out_dir: Path
             body = front + f"## {block.get('title', '')} {badges}\n\n" + content.strip() + "\n"
             if links:
                 body += "\n相关： " + "；".join(links) + "\n"
-            _safe_write(root, f"blocks/{bid}.md", body)
+            _safe_write(root, f"blocks/{bid}.md", body, encoding=encoding)
             index_lines.append(f"- [[blocks/{bid}|{block.get('title', bid)}]] {tags}".rstrip())
-        _safe_write(root, f"{ch}.md", "\n".join(index_lines) + "\n")
+        _safe_write(root, f"{ch}.md", "\n".join(index_lines) + "\n", encoding=encoding)
 
     # 图片复制到导出子目录 assets
     for fig_id, path in figure_paths.items():

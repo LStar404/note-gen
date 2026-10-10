@@ -89,4 +89,6 @@ export const api = {
   deleteProvider: (id: string) => api.del<any>("/api/v1/models/" + id),
   updateRoutes: (body: any) => api.put<any>("/api/v1/model-routes", body),
   usage: () => api.get<any>("/api/v1/usage"),
+  settings: () => api.get<any>("/api/v1/settings"),
+  saveSettings: (body: any) => api.put<any>("/api/v1/settings", body),
 };

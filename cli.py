@@ -71,6 +71,8 @@ def cmd_generate(args) -> int:
     config = _load_config()
     if args.concurrency:
         config.setdefault("generate", {})["concurrency"] = args.concurrency
+    if getattr(args, "language", None):
+        config.setdefault("generate", {})["output_language"] = args.language
     if args.dry_run:
         print(f"[dry-run] generate {args.doc_id} merge={not args.replace}")
         return 0
@@ -121,26 +123,29 @@ def cmd_export(args) -> int:
     from src.export.tex_export import export_tex_book, export_tex_chapter
 
     store = DocStore(layout, args.doc_id)
+    cfg = _load_config()
+    lang = getattr(args, "language", None) or cfg.get("generate", {}).get("output_language", "zh")
+    encoding = getattr(args, "encoding", None) or cfg.get("export", {}).get("encoding", "utf-8")
     out_dir = Path(args.out) if args.out else layout.notes_doc_dir(args.doc_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     chapters = [args.chapter] if args.chapter else [c["chapter_id"] for c in store.manifest()["chapters"]]
     paths = []
     for ch in chapters:
         if args.format in ("md", "both"):
-            paths.append(export_md_chapter(store, ch, out_dir=out_dir))
+            paths.append(export_md_chapter(store, ch, out_dir=out_dir, lang=lang, encoding=encoding))
         if args.format in ("tex", "both"):
-            paths.append(export_tex_chapter(store, ch, out_dir=out_dir))
+            paths.append(export_tex_chapter(store, ch, out_dir=out_dir, lang=lang, encoding=encoding))
         if args.format == "md-obsidian":
-            paths.append(export_md_obsidian(store, ch, out_dir=out_dir.parent))
+            paths.append(export_md_obsidian(store, ch, out_dir=out_dir.parent, lang=lang, encoding=encoding))
         if args.format == "anki":
-            paths.append(export_anki(store, ch, out_dir=out_dir))
+            paths.append(export_anki(store, ch, out_dir=out_dir, lang=lang, encoding=encoding))
     if not args.chapter:
         if args.format == "anki":
-            paths.append(export_anki(store, None, out_dir=out_dir))
+            paths.append(export_anki(store, None, out_dir=out_dir, lang=lang, encoding=encoding))
         if args.format in ("md", "both"):
-            paths.append(export_md_book(store, out_dir=out_dir))
+            paths.append(export_md_book(store, out_dir=out_dir, lang=lang, encoding=encoding))
         if args.format in ("tex", "both"):
-            paths.append(export_tex_book(store, out_dir=out_dir))
+            paths.append(export_tex_book(store, out_dir=out_dir, lang=lang, encoding=encoding))
     for p in paths:
         print(p)
     return 0
@@ -407,6 +412,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("generate"); common(sp)
     sp.add_argument("doc_id"); sp.add_argument("--chapter"); sp.add_argument("--model")
+    sp.add_argument("--language", choices=["zh", "en", "ja"], help="生成笔记语言")
     sp.add_argument("--concurrency", type=int, default=0); sp.add_argument("--force", action="store_true")
     sp.add_argument("--no-cache", action="store_true")
     sp.add_argument("--merge", action="store_true", default=True)
@@ -422,6 +428,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("doc_id"); sp.add_argument("--chapter")
     sp.add_argument("--format", default="md", choices=["md", "tex", "both", "md-obsidian", "anki"])
     sp.add_argument("--out")
+    sp.add_argument("--encoding", choices=["utf-8", "utf-8-sig", "gbk", "big5"],
+                    help="导出文件编码（默认取 config.yaml export.encoding）")
+    sp.add_argument("--language", choices=["zh", "en", "ja"],
+                    help="导出标签语言（默认取 config.yaml generate.output_language）")
     sp.set_defaults(func=cmd_export)
 
     sp = sub.add_parser("run"); common(sp)

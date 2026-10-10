@@ -10,7 +10,8 @@ from src.core.errors import PipelineError, SchemaViolation
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
-from .prompts import FILL_PROMPT, OUTLINE_PROMPT, SYSTEM_PROMPT, anchor_summary_line, build_outline_schema
+from .prompts import (FILL_PROMPT, OUTLINE_PROMPT, SYSTEM_PROMPT, anchor_summary_line,
+                      build_outline_schema, language_instruction)
 from .validate_retry import parse_json_output, validate_outline_payload
 
 
@@ -60,7 +61,7 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
             n_motivation=6,
             anchor_summaries="\n".join(anchor_summary_line(a) for a in batch),
             outline_schema=json.dumps(schema, ensure_ascii=False),
-        )
+        ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
         messages = [{"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt}]
         attempts = 0
