@@ -8,6 +8,7 @@ import json
 from fastapi import APIRouter, Request
 
 from src.core.errors import ConflictError, InputError, NotFound
+from src.core.paths import DOC_ID_RE
 from src.core.store import DocStore, sort_blocks
 
 router = APIRouter()
@@ -185,6 +186,8 @@ def get_anchor(request: Request, anchor_id: str):
     st = state(request)
     for doc_dir in sorted(st.layout.data_dir.glob("*/manifest.json")):
         doc_id = doc_dir.parent.name
+        if not DOC_ID_RE.match(doc_id):
+            continue
         store = DocStore(st.layout, doc_id)
         try:
             anchor = store.anchors_by_id().get(anchor_id)
@@ -199,6 +202,8 @@ def _find_store(st, block_id: str) -> DocStore:
     """block_id → doc 映射：启动扫描 + 提交同步（6.4 点查解析链）。"""
     for doc_dir in sorted(st.layout.data_dir.glob("*/manifest.json")):
         doc_id = doc_dir.parent.name
+        if not DOC_ID_RE.match(doc_id):
+            continue
         try:
             store = DocStore(st.layout, doc_id)
             if block_id in store.blocks_by_id(include_deleted=True):

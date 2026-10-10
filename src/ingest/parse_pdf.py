@@ -76,6 +76,7 @@ class PypdfAdapter(ParserAdapter):
         meta = self.page_meta(page)
         spans: list[dict] = []
         state = {"tm": (1.0, 0.0, 0.0, 1.0, 0.0, 0.0), "tl": 0.0}
+        nonlocal_clamped = [0]
 
         def mat_mul(m1, m2):
             a1, b1, c1, d1, e1, f1 = m1
@@ -107,6 +108,15 @@ class PypdfAdapter(ParserAdapter):
             except Exception:
                 pass
 
+        def text_width(s: str, size: float) -> float:
+            """估算行宽：CJK 约 1em，其它约 0.5em（pypdf 不给出字形宽度表）。"""
+            total = 0.0
+            for ch in s:
+                wide = ("\u4e00" <= ch <= "\u9fff" or "\u3000" <= ch <= "\u303f"
+                        or "\uff00" <= ch <= "\uffef")
+                total += size * (1.0 if wide else 0.5)
+            return max(size * 0.5, total)
+
         def visitor(text, cm, tm, font_dict, font_size):
             if not text or not text.strip():
                 return
@@ -115,10 +125,25 @@ class PypdfAdapter(ParserAdapter):
             x = a1 * e2 + c1 * f2 + e1
             y = b1 * e2 + d1 * f2 + f1
             size = float(font_size or 10.0)
-            width = max(size * 0.5, size * 0.5 * len(text))
+            vb = meta["view_box"]
+            x0, x1 = x, x + text_width(text, size)
+            y0, y1 = y - size * 0.25, y + size
+            clamped = False
+            if x1 > vb[2]:
+                x1, clamped = vb[2], True
+            if x0 < vb[0]:
+                x0, clamped = vb[0], True
+            if y1 > vb[3]:
+                y1, clamped = vb[3], True
+            if y0 < vb[1]:
+                y0, clamped = vb[1], True
+            if x1 - x0 <= 0 or y1 - y0 <= 0:
+                return                      # 起点越界：丢弃该片段
+            if clamped:
+                nonlocal_clamped[0] += 1    # 记录夹取次数，进解析报告
             spans.append({
                 "text": text,
-                "bbox": [x, y - size * 0.25, x + width, y + size],
+                "bbox": [x0, y0, x1, y1],
                 "font_size": size,
             })
 
@@ -130,8 +155,11 @@ class PypdfAdapter(ParserAdapter):
         blocks = _spans_to_blocks(spans)
         if not blocks:
             return {"status": "blank", "blocks": [], "meta": meta}
-        return {"status": "ok", "blocks": blocks, "meta": meta,
-                "source_space": "pdf_user_space", "source_to_pdf": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]}
+        result = {"status": "ok", "blocks": blocks, "meta": meta,
+                  "source_space": "pdf_user_space", "source_to_pdf": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]}
+        if nonlocal_clamped[0]:
+            result["warnings"] = [f"{nonlocal_clamped[0]} 个文本片段的估算边界被夹到页面范围"]
+        return result
 
 
 def _spans_to_blocks(spans: list[dict]) -> list[dict]:
@@ -200,21 +228,46 @@ class WorkerAdapter(ParserAdapter):
         return sys.executable
 
     def _call(self, mode: str, payload: dict) -> dict:
+        """调用 worker：结果走独立文件，stdout 只作诊断（第三方日志可能污染它）。"""
         import subprocess
+        import tempfile
 
         worker = Path(__file__).resolve().parent / "parser_workers.py"
         python = self._resolve_python(self.python)
-        proc = subprocess.run([python, str(worker), mode],
-                              input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                              capture_output=True, cwd=str(Path(__file__).resolve().parents[2]),
-                              timeout=1800)
-        if proc.returncode != 0:
-            raise PipelineError(f"{self.name} worker 退出码 {proc.returncode}: "
-                                f"{proc.stderr.decode('utf-8', 'ignore')[-500:]}")
-        try:
-            return json.loads(proc.stdout.decode("utf-8"))
-        except Exception as exc:
-            raise PipelineError(f"{self.name} worker 输出非法 JSON: {exc}")
+        with tempfile.TemporaryDirectory() as td:
+            out_file = Path(td) / "worker_result.json"
+            req = dict(payload)
+            req["output_path"] = str(out_file)
+            proc = subprocess.run(
+                [python, str(worker), mode],
+                input=json.dumps(req, ensure_ascii=False).encode("utf-8"),
+                capture_output=True,
+                cwd=str(Path(__file__).resolve().parents[2]),
+                timeout=3600,
+                env={**__import__("os").environ, "PYTHONIOENCODING": "utf-8"},
+            )
+            if out_file.exists():
+                return json.loads(out_file.read_text(encoding="utf-8"))
+            if proc.returncode != 0:
+                tail = (proc.stderr or proc.stdout or b"").decode("utf-8", "replace")[-800:]
+                raise PipelineError(f"{self.name} worker 退出码 {proc.returncode}: {tail}")
+            return self._decode_stdout(proc.stdout, proc.stderr)
+
+    def _decode_stdout(self, stdout: bytes, stderr: bytes | None = None) -> dict:
+        """回退：从可能被污染的 stdout 中提取 JSON。"""
+        for enc in ("utf-8", "gbk", "latin-1"):
+            try:
+                text = stdout.decode(enc)
+            except Exception:
+                continue
+            start, end = text.find("{"), text.rfind("}")
+            if start >= 0 and end > start:
+                try:
+                    return json.loads(text[start:end + 1])
+                except Exception:
+                    continue
+        tail = (stderr or stdout or b"").decode("utf-8", "replace")[-800:]
+        raise PipelineError(f"{self.name} worker 输出非法 JSON: {tail}")
 
     def parse_document(self, pdf_path: str | Path, pages_meta: list[dict] | None = None) -> dict:
         """整书解析：返回 {pages:[...], coordinate:{...}, warnings:[...]}。"""
@@ -414,6 +467,18 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
     atomic_write_bytes(layout.manifest(doc_id),
                        (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     return manifest
+
+
+def parse_pdf_with_fallback(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto",
+                            *, fallback: str = "pypdf", **kwargs) -> dict:
+    """解析失败自动降级（NFR-4）：记录告警并用兜底解析器重跑，manifest.parser 如实记录实际解析器。"""
+    try:
+        return parse_pdf(pdf_path, out_dir, parser, **kwargs)
+    except Exception as exc:
+        if parser in (fallback, "auto"):
+            raise
+        print(f"[ingest] {parser} 解析失败（{exc}），回退到 {fallback} 重试", file=sys.stderr)
+        return parse_pdf(pdf_path, out_dir, fallback, **kwargs)
 
 
 def _pages_hash(pages_dir: Path) -> str:

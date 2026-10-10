@@ -210,15 +210,18 @@ def _link_continuations(items: list[_Item]) -> None:
 # ---------------------------------------------------------------------------
 def _materialize(doc_id: str, chapter_id: str, items: list[_Item], *, layout: Layout,
                  store: DocStore, collision_map: dict) -> list[dict]:
-    # 已有 ID 池（其它章节 + 本章旧数据），保证全文档唯一
-    used_ids: set[str] = set()
+    # 已有 ID 池（其它章节为永久占用；本章旧数据将被替换），保证全文档唯一
+    taken: dict[str, str] = {}          # anchor_id -> text_hash（其它章节）
     old_by_key: dict[tuple, str] = {}
+    previous = {r["anchor_id"]: r for r in
+                (store.anchor_rows(chapter_id) if chapter_id in store.chapter_ids() else [])}
     for ch in store.chapter_ids():
         for row in store.anchor_rows(ch):
-            used_ids.add(row["anchor_id"])
-            old_by_key[(row.get("text_hash"), row.get("chapter_id"), row.get("page"),
-                        row.get("content"))] = row["anchor_id"]
-    previous = {r["anchor_id"]: r for r in (store.anchor_rows(chapter_id) if chapter_id in store.chapter_ids() else [])}
+            if ch == chapter_id:
+                old_by_key[(row.get("text_hash"), row.get("chapter_id"), row.get("page"),
+                            row.get("content"))] = row["anchor_id"]
+            else:
+                taken[row["anchor_id"]] = row.get("text_hash", "")
 
     view_boxes = {p["page"]: p["view_box"] for p in store.manifest().get("pages", [])}
 
@@ -232,18 +235,28 @@ def _materialize(doc_id: str, chapter_id: str, items: list[_Item], *, layout: La
     rows: list[dict] = []
     assigned: dict[str, str] = {}
     for it, th, base in prepared:
-        counts[base] = counts.get(base, 0) + 1
-        n = counts[base]
-        anchor_id = with_suffix(base, n)
-
         # 重解析尽力复用旧实例 ID（5.5）：同内容 + 同章 + 同页位次
         reuse = old_by_key.get((th, chapter_id, it.page, it.content))
         if reuse and reuse not in {r["anchor_id"] for r in rows}:
             anchor_id = reuse
-        elif anchor_id in used_ids and anchor_id not in previous:
-            raise SchemaViolation(f"anchor_id 冲突（截断哈希碰撞）: {anchor_id}", code="ANCHOR_COLLISION")
+        else:
+            # 全文档重复消歧（5.2）：同基础 ID 第一个用基础 ID，后续 -2/-3/…
+            n = counts.get(base, 0)
+            while True:
+                n += 1
+                cand = with_suffix(base, n)
+                holder = taken.get(cand)
+                if holder is None:
+                    break
+                if holder != th:
+                    # 同截断哈希但内容不同：真正的哈希碰撞，不得覆盖
+                    raise SchemaViolation(f"anchor_id 冲突（截断哈希碰撞）: {cand}",
+                                          code="ANCHOR_COLLISION")
+            counts[base] = n
+            anchor_id = cand
+        taken[anchor_id] = th
 
-        if n > 1:
+        if anchor_id != base:
             collision_map.setdefault(base, [])
         row = {
             "anchor_id": anchor_id,
@@ -277,7 +290,7 @@ def _materialize(doc_id: str, chapter_id: str, items: list[_Item], *, layout: La
     # 记录碰撞映射（5.2）：基础 ID → 实例列表
     by_base: dict[str, list[dict]] = {}
     for (it, th, base), row in zip(prepared, rows):
-        if counts[base] > 1:
+        if counts.get(base, 0) > 1 or row["anchor_id"] != base:
             by_base.setdefault(base, []).append({
                 "anchor_id": row["anchor_id"], "text_hash": th, "page": row["page"],
                 "reading_order": row["reading_order"], "chapter_id": chapter_id,

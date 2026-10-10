@@ -33,17 +33,17 @@ def _client(layout: Layout, config: dict):
 
 
 def cmd_ingest(args) -> int:
-    from src.ingest.parse_pdf import parse_pdf
+    from src.ingest.parse_pdf import parse_pdf_with_fallback
 
     layout = _layout()
     config = _load_config()
     if args.dry_run:
         print(f"[dry-run] ingest {args.pdf_path} doc_id={args.doc_id} parser={args.parser}")
         return 0
-    manifest = parse_pdf(args.pdf_path, layout.ingest_root, args.parser, layout=layout,
-                         doc_id=args.doc_id, profile=args.profile,
-                         title=args.title, ocr=args.ocr,
-                         chapters_override=args.chapters_override, config=config)
+    manifest = parse_pdf_with_fallback(args.pdf_path, layout.ingest_root, args.parser,
+                                       layout=layout, doc_id=args.doc_id, profile=args.profile,
+                                       title=args.title, ocr=args.ocr,
+                                       chapters_override=args.chapters_override, config=config)
     print(json.dumps({"doc_id": manifest["doc_id"], "chapters": manifest["chapters"],
                       "pages": len(manifest["pages"])}, ensure_ascii=False))
     return 0
@@ -156,12 +156,13 @@ def cmd_run(args) -> int:
     from src.anchor.chunker import chunk_and_anchor
     from src.db.reindex import reindex_doc
     from src.generate.engine import generate_chapter
-    from src.ingest.parse_pdf import parse_pdf
+    from src.ingest.parse_pdf import parse_pdf_with_fallback
     from src.link.backlink import link_doc
 
-    manifest = parse_pdf(args.pdf_path, layout.ingest_root, args.parser, layout=layout,
-                         doc_id=args.doc_id, profile=args.profile, title=args.title,
-                         ocr=args.ocr, config=config)
+    manifest = parse_pdf_with_fallback(args.pdf_path, layout.ingest_root, args.parser,
+                                       layout=layout, doc_id=args.doc_id,
+                                       profile=args.profile, title=args.title,
+                                       ocr=args.ocr, config=config)
     doc_id = manifest["doc_id"]
     store = DocStore(layout, doc_id)
     for ch in store.chapter_ids():

@@ -13,7 +13,7 @@ from src.core.errors import InputError, NotFound
 from src.core.paths import DOC_ID_RE, FIGURE_ID_RE
 from src.core.store import DocStore
 from src.db import queries
-from src.ingest.parse_pdf import parse_pdf
+from src.ingest.parse_pdf import parse_pdf_with_fallback
 
 router = APIRouter()
 
@@ -27,6 +27,8 @@ def list_docs(request: Request):
     st = state(request)
     out = []
     for path in sorted(st.layout.data_dir.glob("*/manifest.json")):
+        if not DOC_ID_RE.match(path.parent.name):
+            continue            # 跳过 .bak-* 等备份目录
         try:
             import json
 
@@ -62,11 +64,11 @@ async def create_doc(request: Request, file: UploadFile = File(...), title: str 
 
     def run(req, progress, is_cancelled, register_artifact):
         progress({"stage": "ingest"})
-        manifest = parse_pdf(target, st.layout.ingest_root,
-                             st.config.get("parser", {}).get("default", "auto"),
-                             layout=st.layout, doc_id=doc, profile=profile,
-                             title=title or Path(file.filename).stem,
-                             config=st.config)
+        manifest = parse_pdf_with_fallback(target, st.layout.ingest_root,
+                                           st.config.get("parser", {}).get("default", "auto"),
+                                           layout=st.layout, doc_id=doc, profile=profile,
+                                           title=title or Path(file.filename).stem,
+                                           config=st.config)
         progress({"stage": "anchor"})
         from src.anchor.chunker import chunk_and_anchor
 

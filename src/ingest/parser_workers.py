@@ -21,6 +21,14 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
+
+# 第三方库（torch/transformers 等）可能向 stdout 打印本地编码日志；强制 UTF-8 并尽量保持安静
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 
 def _read_request() -> dict:
@@ -33,8 +41,15 @@ def _read_request() -> dict:
     return req
 
 
-def _write(obj: dict) -> None:
-    sys.stdout.write(json.dumps(obj, ensure_ascii=False))
+def _write(obj: dict, req: dict | None = None) -> None:
+    """结果优先写入 output_path（UTF-8），避免 stdout 被第三方日志污染导致解析失败。"""
+    payload = json.dumps(obj, ensure_ascii=False)
+    out_path = (req or {}).get("output_path")
+    if out_path:
+        Path(out_path).write_text(payload, encoding="utf-8")
+        sys.stdout.write("RESULT_OK")
+    else:
+        sys.stdout.write(payload)
     sys.stdout.flush()
 
 
@@ -362,9 +377,9 @@ def main() -> int:
     }
     handler = handlers.get(mode)
     if handler is None:
-        _write({"ok": False, "error": f"未知模式: {mode}"})
+        _write({"ok": False, "error": f"未知模式: {mode}"}, req)
         return 1
-    _write(handler(req))
+    _write(handler(req), req)
     return 0
 
 
