@@ -12,3 +12,4 @@
 | D32 | marker 2.x 块 bbox 采用"页面包围盒自标定"换算（scale_x/scale_y + y 轴翻转） | marker 各版本 bbox 空间不统一（0-1 归一化/像素/点），不能硬编码一套公式；自标定参数记入 `coordinate_meta.derivation` 供审计 | 实现级 |
 | D33 | embedding 三档 provider：none（默认）/onnx_bge（真语义）/hashed_lexical（明确标注的词法回退） | 语义向量需要 bge ONNX 模型（不随仓库分发）；hashed_lexical 仅用于打通 sqlite-vec 链路并在文档中声明非语义 | v2 |
 | D34 | Anki 导出 `.apkg`（genanki）+ CSV 回退；eval 三维度评分与基线回归告警 | 对应 11.4/10.5 交付项；卡片与 deck ID 确定性派生，重复导入即更新 | v2 |
+| D35 | 新增配置指南（`GET /api/v1/setup/status` 只读自检 + 前端六步向导，首启未就绪自动弹出）；顺带修复 `upsert_provider` 掩码回写覆盖真密钥 | 首次配置横跨 models.json 注册表/config.yaml/路由/解析器 venv 多处（D21/D31），门槛高易配错；自检复用既有状态（registry/config/parser 探测）不新增写契约，向导只调用既有 PUT models/model-routes/settings 接口，不改变行为契约；掩码值与 `mask_key` 一致即视为未改动、保留原 key（显式新值仍生效），消除 UI 回传掩码把密钥覆盖成 "****xxxx" 的风险 | 实现级 |

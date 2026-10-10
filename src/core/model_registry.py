@@ -151,6 +151,12 @@ class ModelRegistry:
         if not pid:
             raise InputError("provider.id 必填")
         data = self.load()
+        old = next((p for p in data.get("providers", []) if p.get("id") == pid), None)
+        # 界面回传的是掩码密钥（末 4 位 + *），不能把真 key 覆盖成掩码：
+        # 仅当 api_key 与旧 key 的掩码一致时视为「未改动」，保留原值。
+        if old is not None and provider.get("api_key"):
+            if provider["api_key"] == mask_key(self.api_key(old)):
+                provider = {**provider, "api_key": old.get("api_key")}
         providers = [p for p in data.get("providers", []) if p.get("id") != pid]
         providers.append(provider)
         data["providers"] = providers

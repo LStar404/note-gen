@@ -1,9 +1,11 @@
 import { useEffect } from "react";
+import { api } from "./api/client";
 import Toolbar from "./components/Toolbar";
 import PdfPane from "./pdf/PdfPane";
 import NotesPane from "./components/NotesPane";
 import BlockDetailPanel from "./components/BlockDetailPanel";
 import SettingsPanel from "./components/SettingsPanel";
+import SetupGuide from "./components/SetupGuide";
 import ReviewQueue from "./components/ReviewQueue";
 import { useStore } from "./state/store";
 
@@ -43,6 +45,7 @@ export default function App() {
       }
       if (e.key === "Escape") {
         openSettings(false);
+        useStore.getState().openSetup(false);
         openReview(false);
         useStore.getState().setAgent({ plan: null, planId: null });
         return;
@@ -71,6 +74,18 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [blocks, selectedBlockId, view]);
 
+  // 配置指南（ADR D35）：首次使用且未就绪时自动弹出；手动关闭后不再打扰
+  useEffect(() => {
+    api
+      .setupStatus()
+      .then((s: any) => {
+        if (s.first_run && !s.ready && !localStorage.getItem("note-gen-setup-seen")) {
+          useStore.getState().openSetup(true);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+
   // 脏草稿守卫（7.3）：关页前提示
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -92,6 +107,7 @@ export default function App() {
         <BlockDetailPanel />
       </main>
       <SettingsPanel />
+      <SetupGuide />
       <ReviewQueue />
       {toast && <div className="toast">{toast}</div>}
     </div>

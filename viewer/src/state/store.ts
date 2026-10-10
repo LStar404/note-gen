@@ -27,6 +27,7 @@ interface Store {
   view: "card" | "source" | "preview";
   dirtyDraft: string | null;
   settingsOpen: boolean;
+  setupOpen: boolean;
   reviewOpen: boolean;
   reviewItems: NoteBlock[];
   toast: string | null;
@@ -46,6 +47,7 @@ interface Store {
   setAgent: (patch: Partial<AgentState>) => void;
   setToast: (msg: string | null) => void;
   openSettings: (open: boolean) => void;
+  openSetup: (open: boolean) => void;
   openReview: (open: boolean) => Promise<void>;
 }
 
@@ -63,6 +65,7 @@ export const useStore = create<Store>((set, get) => ({
   view: "card",
   dirtyDraft: null,
   settingsOpen: false,
+  setupOpen: false,
   reviewOpen: false,
   reviewItems: [],
   toast: null,
@@ -113,6 +116,7 @@ export const useStore = create<Store>((set, get) => ({
     if (msg) setTimeout(() => set({ toast: null }), 3000);
   },
   openSettings: (open) => set({ settingsOpen: open }),
+  openSetup: (open) => set({ setupOpen: open }),
   openReview: async (open) => {
     if (!open) return set({ reviewOpen: false });
     const { docId } = get();

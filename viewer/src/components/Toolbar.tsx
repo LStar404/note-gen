@@ -13,6 +13,7 @@ export default function Toolbar() {
   const selectDoc = useStore((s) => s.selectDoc);
   const selectChapter = useStore((s) => s.selectChapter);
   const openSettings = useStore((s) => s.openSettings);
+  const openSetup = useStore((s) => s.openSetup);
   const openReview = useStore((s) => s.openReview);
   const setToast = useStore((s) => s.setToast);
   const [query, setQuery] = useState("");
@@ -190,6 +191,7 @@ export default function Toolbar() {
       <button onClick={() => void doExport("tex")}>导出 tex</button>
       <button onClick={() => void doExport("md-obsidian")}>导出 Obsidian</button>
       <button onClick={() => void openReview(true)}>待审核</button>
+      <button onClick={() => openSetup(true)} title="配置指南：环境自检与首次使用引导">配置指南</button>
       <button onClick={() => openSettings(true)}>设置</button>
 
       <div className="search-box">

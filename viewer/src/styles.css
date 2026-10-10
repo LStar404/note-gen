@@ -327,3 +327,44 @@ select:focus, input:focus, textarea:focus {
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 99px; border: 2px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------------- 配置指南（ADR D35） ---------------- */
+.setup-modal { display: flex; flex-direction: column; gap: 14px; }
+.setup-layout { display: grid; grid-template-columns: 230px 1fr; gap: 18px; min-height: 320px; }
+.setup-steps { display: flex; flex-direction: column; gap: 6px; }
+.setup-step {
+  display: flex; gap: 10px; align-items: center; text-align: left; padding: 10px 12px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.setup-step:hover { border-color: var(--border-strong); }
+.setup-step.active { border-color: var(--accent); background: var(--accent-soft); }
+.setup-step.done .setup-step-no {
+  background: var(--ok-soft); color: var(--ok); border-color: var(--ok);
+}
+.setup-step-no {
+  width: 24px; height: 24px; flex: none; display: grid; place-items: center; font-size: 12px;
+  border: 1px solid var(--border-strong); border-radius: 99px; color: var(--muted);
+}
+.setup-step span:last-child { display: flex; flex-direction: column; gap: 2px; }
+.setup-step i { font-style: normal; font-size: 11px; }
+.setup-body { display: flex; flex-direction: column; gap: 12px; overflow: auto; padding-right: 4px; }
+.setup-stack { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.setup-stack .form-grid, .setup-stack .provider-card { width: 100%; }
+.setup-check {
+  border: 1px solid var(--border); border-left-width: 3px; border-radius: var(--radius-sm);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; background: var(--panel-2);
+}
+.setup-check.ok { border-left-color: var(--ok); }
+.setup-check.warn { border-left-color: var(--warn); }
+.setup-check.fail { border-left-color: var(--danger); }
+.setup-check-head { display: flex; gap: 8px; align-items: center; }
+.setup-footer {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  border-top: 1px solid var(--border); padding-top: 12px;
+}
+.row-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+@media (max-width: 860px) {
+  .setup-layout { grid-template-columns: 1fr; }
+  .setup-steps { flex-direction: row; flex-wrap: wrap; }
+}

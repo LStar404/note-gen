@@ -14,6 +14,7 @@ from src.core.errors import NoteGenError
 from .routes import blocks as blocks_routes
 from .routes import docs as docs_routes
 from .routes import system as system_routes
+from .setup_guide import router as setup_routes
 from .security import LocalSecurityMiddleware
 from .state import AppState
 
@@ -63,6 +64,7 @@ def create_app(root: str | Path | None = None, port: int | None = None) -> FastA
     app.include_router(docs_routes.router)
     app.include_router(blocks_routes.router)
     app.include_router(system_routes.router)
+    app.include_router(setup_routes)
 
     dist = root / "viewer" / "dist"
     if dist.exists():
