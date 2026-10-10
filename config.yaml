@@ -1,38 +1,38 @@
 app:
-  host: 127.0.0.1          # MUST 本地绑定（NFR-1）
+  host: 127.0.0.1
   port: 8787
-  cors_origins: ["http://127.0.0.1:5173"]   # 开发前端（Vite 默认端口）；生产构建同源后置空
+  cors_origins:
+  - http://127.0.0.1:5173
 parser:
-  default: marker          # marker | docling | pypdf（auto 依次尝试可用者）
-  ocr_mode: auto          # auto | force | off；按页判断，不按全书无字比例开启
-  python: null            # 解析器 worker 解释器；重型依赖装在 .venv-parsers 时指向其 python.exe
-chapters_override: []     # 手动章区间覆盖优先；空时自动检测
+  default: marker
+  ocr_mode: auto
+  python: null
+chapters_override: []
 generate:
-  models:                  # 任务→模型路由（模型名在 data/models.json 注册表解析，可 `provider/model` 全名或唯一短名）
-    default: "openai/gpt-4o-mini" # 示例；必须在注册表中存在；null 槽位回退 default
-    outline: null          # 提纲：便宜快模型（成本控制，5.3）
-    fill: null            # 按评测结果选择，不引用未注册模型
-    agent: null            # agent 编辑：须 tools 能力（9.5.1）
-    link: null             # link 阶段可选补充调用（可关闭）
-  outline_max_in: 32000    # 5.3.2 默认值
+  models:
+    default: null
+    outline: null
+    fill: null
+    agent: null
+    link: null
+  outline_max_in: 32000
   fill_max_in: 8000
   concurrency: 2
-  max_cost_per_chapter: 0.0   # 单章成本上限（美元，0=不限；5.3.5）
-  temperature: 0.2          # prompt_version 不在此配置：唯一权威是 prompts.py 顶部常量（5.3.4）
-generate:
-  output_language: zh       # zh | en | ja  生成笔记与导出标签语言
+  max_cost_per_chapter: 0.0
+  temperature: 0.2
+  output_language: zh
 export:
-  encoding: utf-8           # utf-8 | utf-8-sig | gbk | big5  导出文件编码
+  encoding: utf-8
 embedding:
-  provider: none        # none | onnx_bge | hashed_lexical（后者仅为链路回退，非语义向量）
-  model_dir: null       # onnx_bge 模型目录（需含 model.onnx + tokenizer.json）
-  dim: 1024             # 段落级向量维度（5.2）
-  threshold: 0.55       # 语义检索 cosine 相似度阈值（6.3.3）
+  provider: none
+  model_dir: null
+  dim: 1024
+  threshold: 0.55
 cache:
-  dir: "cache/gen"
+  dir: cache/gen
 match:
-  contain_ratio: 0.8       # 6.3 阈值
+  contain_ratio: 0.8
   cover_ratio: 0.5
   top_k: 8
 history:
-  keep_recent: 50          # 4.4.6 保留策略
+  keep_recent: 50

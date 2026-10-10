@@ -27,14 +27,16 @@ def _safe_write(out_dir: Path, rel: str, content: str, encoding: str = "utf-8") 
     path = out_dir / rel
     registry_path = _registry_path(out_dir)
     registry = json.loads(registry_path.read_text(encoding="utf-8")) if registry_path.exists() else {}
-    new_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    # 导出编码（export.encoding）：utf-8 / utf-8-sig / gbk / big5
+    # hash 必须按落盘字节计算，否则非 UTF-8 导出会被误判为“人工改动”
+    data = content.encode(encoding, errors="replace")
+    new_hash = hashlib.sha256(data).hexdigest()
     if path.exists():
         cur_hash = hashlib.sha256(path.read_bytes()).hexdigest()
         if registry.get(rel) and registry[rel] != cur_hash:
             path = out_dir / (Path(rel).stem + ".exported" + Path(rel).suffix)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # 导出编码（export.encoding）：utf-8 / utf-8-sig / gbk / big5
-    path.write_bytes(content.encode(encoding, errors="replace"))
+    path.write_bytes(data)
     registry[str(rel)] = new_hash
     registry_path.write_text(json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8")
     return path

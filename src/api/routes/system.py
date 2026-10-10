@@ -129,6 +129,9 @@ def trigger_export(request: Request, body: dict):
     fmt = body.get("format", "md")
     if fmt not in ("md", "tex", "both", "md-obsidian", "anki"):
         raise InputError(f"不支持的导出格式: {fmt}")
+    # 导出语言/编码：请求可覆盖，默认取全局设置
+    lang = body.get("language") or st.config.get("generate", {}).get("output_language", "zh")
+    encoding = body.get("encoding") or st.config.get("export", {}).get("encoding", "utf-8")
 
     def run(req, progress, is_cancelled, register_artifact):
         from src.core.store import DocStore
@@ -143,20 +146,27 @@ def trigger_export(request: Request, body: dict):
         for ch in chapters:
             progress({"stage": "export", "chapter_id": ch})
             if fmt in ("md", "both"):
-                paths.append(str(export_md_chapter(store, ch, out_dir=out_dir)))
+                paths.append(str(export_md_chapter(store, ch, out_dir=out_dir,
+                                                   lang=lang, encoding=encoding)))
             if fmt in ("tex", "both"):
-                paths.append(str(export_tex_chapter(store, ch, out_dir=out_dir)))
+                paths.append(str(export_tex_chapter(store, ch, out_dir=out_dir,
+                                                    lang=lang, encoding=encoding)))
             if fmt == "md-obsidian":
-                paths.append(str(export_md_obsidian(store, ch, out_dir=out_dir.parent)))
+                paths.append(str(export_md_obsidian(store, ch, out_dir=out_dir.parent,
+                                                    lang=lang, encoding=encoding)))
             if fmt == "anki":
-                paths.append(str(export_anki(store, ch, out_dir=out_dir)))
+                paths.append(str(export_anki(store, ch, out_dir=out_dir,
+                                             lang=lang, encoding=encoding)))
         if chapter_id is None:
             if fmt in ("md", "both"):
-                paths.append(str(export_md_book(store, out_dir=out_dir)))
+                paths.append(str(export_md_book(store, out_dir=out_dir,
+                                                lang=lang, encoding=encoding)))
             if fmt in ("tex", "both"):
-                paths.append(str(export_tex_book(store, out_dir=out_dir)))
+                paths.append(str(export_tex_book(store, out_dir=out_dir,
+                                                 lang=lang, encoding=encoding)))
             if fmt == "anki":
-                paths.append(str(export_anki(store, None, out_dir=out_dir)))
+                paths.append(str(export_anki(store, None, out_dir=out_dir,
+                                             lang=lang, encoding=encoding)))
         for p in paths:
             register_artifact(Path(p).name, p)
         return {"paths": paths}

@@ -191,17 +191,27 @@ def cmd_run(args) -> int:
     link_doc(doc_id, chapter_id=args.chapter, layout=layout)
     reindex_doc(layout, doc_id)
 
-    from src.export.md_export import export_md_book, export_md_chapter
+    from src.export.anki_export import export_anki
+    from src.export.md_export import export_md_book, export_md_chapter, export_md_obsidian
     from src.export.tex_export import export_tex_chapter
 
     out_dir = layout.notes_doc_dir(doc_id)
+    lang = getattr(args, "language", None) or config.get("generate", {}).get("output_language", "zh")
+    encoding = getattr(args, "encoding", None) or config.get("export", {}).get("encoding", "utf-8")
     for ch in ([args.chapter] if args.chapter else store.chapter_ids()):
         if args.format in ("md", "both"):
-            export_md_chapter(store, ch, out_dir=out_dir)
+            export_md_chapter(store, ch, out_dir=out_dir, lang=lang, encoding=encoding)
         if args.format in ("tex", "both"):
-            export_tex_chapter(store, ch, out_dir=out_dir)
-    if not args.chapter and args.format in ("md", "both"):
-        export_md_book(store, out_dir=out_dir)
+            export_tex_chapter(store, ch, out_dir=out_dir, lang=lang, encoding=encoding)
+        if args.format == "md-obsidian":
+            export_md_obsidian(store, ch, out_dir=out_dir.parent, lang=lang, encoding=encoding)
+        if args.format == "anki":
+            export_anki(store, ch, out_dir=out_dir, lang=lang, encoding=encoding)
+    if not args.chapter:
+        if args.format in ("md", "both"):
+            export_md_book(store, out_dir=out_dir, lang=lang, encoding=encoding)
+        if args.format == "anki":
+            export_anki(store, None, out_dir=out_dir, lang=lang, encoding=encoding)
     print(json.dumps({"doc_id": doc_id, "failed_chapters": failed,
                       "notes_out": str(out_dir)}, ensure_ascii=False))
     return 2 if failed else 0
@@ -440,6 +450,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--parser", default="auto", choices=["auto", "marker", "docling", "pypdf"])
     sp.add_argument("--chapter"); sp.add_argument("--model")
     sp.add_argument("--format", default="md", choices=["md", "tex", "both", "md-obsidian", "anki"])
+    sp.add_argument("--encoding", choices=["utf-8", "utf-8-sig", "gbk", "big5"],
+                    help="导出文件编码")
+    sp.add_argument("--language", choices=["zh", "en", "ja"], help="生成与导出语言")
     sp.add_argument("--ocr", action="store_true"); sp.add_argument("--force", action="store_true")
     sp.add_argument("--concurrency", type=int, default=0); sp.add_argument("--no-cache", action="store_true")
     sp.add_argument("--merge", action="store_true", default=True)

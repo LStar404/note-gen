@@ -360,6 +360,7 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
     ocr_engine = FormulaOCR(python=parser_python) if ocr else None
     ocr_mode = ((config or {}).get("parser", {}) or {}).get("ocr_mode", "auto") or "auto"
     page_records: list[dict] = []
+    pending: list[dict] = []
     failed = 0
     figure_seq = 0
     ocr_pages_used = 0
@@ -383,15 +384,8 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
             result.setdefault("meta", meta)
         view_box = meta["view_box"]
         blocks = result.get("blocks", [])
-        # 纯图片/扫描页：无文字层时按 ocr_mode 触发 OCR（5.1.1 OCR 分支）
-        if ocr_mode != "off" and (ocr_mode == "force" or not blocks):
-            ocr_out = ocr_pages_via_worker(pdf_path, [i + 1], pages_meta_all,
-                                           python=parser_python)
-            ocr_blocks = ((ocr_out or {}).get("pages") or [{}])[0].get("blocks", [])
-            if ocr_blocks:
-                blocks = ocr_blocks if not blocks else blocks + ocr_blocks
-                result["status"] = "ok"
-                ocr_pages_used += 1
+        # 纯图片/扫描页：无文字层时标记待 OCR（批量一次调用，见循环后）
+        needs_ocr = ocr_mode != "off" and (ocr_mode == "force" or not blocks)
         source_to_pdf = result.get("source_to_pdf", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
         source_space = result.get("source_space", "pdf_user_space")
 
@@ -438,16 +432,52 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
             "parse_status": result.get("status", "ok"),
             "blocks": normalized,
         }
-        atomic_write_bytes(pages_dir / f"{i + 1:04d}.json",
-                           (json.dumps(page_json, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+        pending.append({"index": i, "page_json": page_json, "needs_ocr": needs_ocr,
+                        "meta": meta, "status": result.get("status", "ok")})
         if result.get("status") == "failed":
             failed += 1
+
+    # 纯图片/扫描页 OCR（5.1.1）：批量一次调用，避免每页起一个 worker 进程
+    if ocr_mode != "off" and any(p["needs_ocr"] for p in pending):
+        targets = [p["index"] + 1 for p in pending if p["needs_ocr"]]
+        ocr_out = ocr_pages_via_worker(pdf_path, targets, pages_meta_all, python=parser_python)
+        ocr_by_page = {}
+        for pg in ((ocr_out or {}).get("pages") or []):
+            ocr_by_page[pg.get("page")] = pg.get("blocks", [])
+        for p in pending:
+            if not p["needs_ocr"]:
+                continue
+            ocr_blocks = ocr_by_page.get(p["index"] + 1) or []
+            if not ocr_blocks:
+                continue
+            vb = p["meta"]["view_box"]
+            for blk in ocr_blocks:
+                try:
+                    bbox = validate_bbox(blk.get("bbox", vb), vb)
+                except Exception:
+                    continue
+                item = {"type": blk.get("type", "paragraph"),
+                        "level": int(blk.get("level", 0) or 0),
+                        "text": blk.get("text", ""), "bbox": bbox}
+                if blk.get("confidence") is not None:
+                    item["confidence"] = float(blk["confidence"])
+                p["page_json"]["blocks"].append(item)
+            if p["page_json"]["blocks"]:
+                p["page_json"]["parse_status"] = "ok"
+                p["status"] = "ok"
+                ocr_pages_used += 1
+
+    for p in pending:
+        page_json = p["page_json"]
+        page_name = "%04d.json" % (p["index"] + 1)
+        atomic_write_bytes(pages_dir / page_name,
+                           (json.dumps(page_json, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
         page_records.append({
-            "page": i + 1,
-            "view_box": list(view_box),
-            "user_unit": float(meta.get("user_unit", 1.0)),
-            "rotation": int(meta.get("rotation", 0)),
-            "parse_status": result.get("status", "ok"),
+            "page": p["index"] + 1,
+            "view_box": list(page_json["coordinate_meta"]["view_box"]),
+            "user_unit": float(p["meta"].get("user_unit", 1.0)),
+            "rotation": int(p["meta"].get("rotation", 0)),
+            "parse_status": p["status"],
         })
 
     if n_pages and failed / n_pages > 0.05:
