@@ -9,7 +9,6 @@ from pathlib import Path
 
 from jinja2 import Template
 
-from src.core.paths import Layout
 from src.core.store import DocStore
 from src.export.render import (figure_index, labels_for, heading_line, live_blocks,
                                rewrite_citations, rewrite_figures, source_badges)

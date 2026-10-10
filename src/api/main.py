@@ -32,7 +32,7 @@ def create_app(root: str | Path | None = None, port: int | None = None) -> FastA
                      "127.0.0.1", "localhost"}
     allowed_origins = set(state.config.get("app", {}).get("cors_origins", []) or [])
     allowed_origins |= {f"http://127.0.0.1:{cfg_port}", f"http://localhost:{cfg_port}",
-                        f"http://127.0.0.1:5173", f"http://localhost:5173"}
+                        "http://127.0.0.1:5173", "http://localhost:5173"}
     app.add_middleware(LocalSecurityMiddleware, token=state.token_value,
                        allowed_hosts=allowed_hosts, allowed_origins=allowed_origins)
 

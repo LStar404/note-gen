@@ -6,7 +6,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import create_app
-from src.core.paths import Layout
 
 
 @pytest.fixture()
@@ -95,10 +94,6 @@ def test_docs_and_blocks_flow(client):
 
 
 def test_reorder_and_page_blocks(client):
-    store = __import__("src.core.store", fromlist=["DocStore"]).DocStore(
-        client.app.state.app_state.layout, client.doc_id)
-    anchor_id = store.anchor_rows("ch01")[1]["anchor_id"]
-    quote = store.anchors_by_id()[anchor_id]["content"][:12]
     ids = []
     for i in range(2):
         r = client.post(f"/api/v1/docs/{client.doc_id}/chapters/ch01/blocks", json={

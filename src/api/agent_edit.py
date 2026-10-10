@@ -4,13 +4,9 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any
 
-from src.core.errors import BlockLocked, ConflictError, InputError, NotFound, SchemaViolation
-from src.core.models import NoteBlock
-from src.core.paths import Layout
+from src.core.errors import ConflictError, InputError, NotFound, SchemaViolation
 from src.core.store import DocStore
-from src.core.text import utc_now_iso
 from src.generate.prompts import AGENT_SYSTEM_PROMPT
 
 AGENT_TOOLS = [

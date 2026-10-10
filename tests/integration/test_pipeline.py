@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 
 from src.core.llm import DummyProvider, LLMClient
 from src.core.model_registry import ModelRegistry

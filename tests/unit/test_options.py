@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from src.core.paths import Layout
 from src.core.store import DocStore

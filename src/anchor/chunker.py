@@ -9,10 +9,9 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
 
 from src.core.errors import PipelineError, SchemaViolation
-from src.core.jsonl import canonical_json, dump_line, load_jsonl
+from src.core.jsonl import canonical_json
 from src.core.models import ParagraphAnchor, Reference, validate_anchor
 from src.core.paths import Layout
 from src.core.store import DocMutation, DocStore
@@ -213,8 +212,6 @@ def _materialize(doc_id: str, chapter_id: str, items: list[_Item], *, layout: La
     # 已有 ID 池（其它章节为永久占用；本章旧数据将被替换），保证全文档唯一
     taken: dict[str, str] = {}          # anchor_id -> text_hash（其它章节）
     old_by_key: dict[tuple, str] = {}
-    previous = {r["anchor_id"]: r for r in
-                (store.anchor_rows(chapter_id) if chapter_id in store.chapter_ids() else [])}
     for ch in store.chapter_ids():
         for row in store.anchor_rows(ch):
             if ch == chapter_id:

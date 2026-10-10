@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import json
 import sys
 import time
@@ -38,7 +37,7 @@ def wait_task(c, tid, timeout=60):
 def main() -> int:
     app = create_app(ROOT)
     token = app.state.app_state.token_value
-    c = TestClient(app, base_base := "http://127.0.0.1:8787") if False else TestClient(app, base_url="http://127.0.0.1:8787")
+    c = TestClient(app, base_url="http://127.0.0.1:8787")
     c.headers.update({"X-Local-Token": token})
 
     # ---- 1) agent 编辑：无 tools 能力模型 ----

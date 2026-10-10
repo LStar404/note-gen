@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import io
-import json
 import sys
 import time
 import uuid
@@ -53,7 +51,6 @@ def main() -> int:
                f"status={t['status']} err={(t.get('error') or {}).get('message', '')[:100]}")
 
     # 3) 空内容 PDF（无文字层、无图）
-    from tests.fixtures.make_sample_pdf import build_sample_pdf
     tmp = ROOT / "data" / "_probe_blank.pdf"
     import pypdf
     w = pypdf.PdfWriter()

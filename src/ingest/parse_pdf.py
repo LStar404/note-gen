@@ -12,12 +12,11 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any
 
-from src.core.coord import pixels_top_left_to_pdf, transform_rect, validate_bbox
+from src.core.coord import transform_rect, validate_bbox
 from src.core.errors import InputError, PipelineError
 from src.core.jsonl import atomic_write_bytes, canonical_json, sha256_file
-from src.core.models import Manifest, PageMeta, ParserInfo
+from src.core.models import Manifest
 from src.core.paths import Layout, rel_to_root
 from src.core.text import utc_now_iso
 

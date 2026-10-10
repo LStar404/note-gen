@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from src.core.models import BLOCK_SNAPSHOT_FIELDS
 
 
 def suggest_links(chapter_id: str, blocks: list[dict], anchors: list[dict]) -> dict[str, list[str]]:

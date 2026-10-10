@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from src.core.text import (base_anchor_id, doc_namespace, estimate_tokens, new_block_id,
                            normalize_text, search_normalize, slugify, text_hash, with_suffix)

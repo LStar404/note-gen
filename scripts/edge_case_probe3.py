@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import sys
 import time
-import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -78,7 +76,6 @@ def main() -> int:
            f"{r.status_code} stored_extra={'unknown_field' in after}")
 
     # ---- 5) 重复来源锚点 ----
-    anchor = c.get(f"/api/v1/docs/{doc}/chapters/{ch}/blocks").json()
     from src.core.store import DocStore
     from src.core.paths import Layout
     s = DocStore(Layout(ROOT), doc)

@@ -8,7 +8,7 @@ import pytest
 
 from src.core.errors import RevisionConflict
 from src.core.store import DocMutation, DocStore
-from src.core.transactions import FileChange, commit_doc, doc_lock, recover_doc, replace_change
+from src.core.transactions import doc_lock, recover_doc
 
 
 def test_commit_increments_revision(store: DocStore):

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Iterable
 
 from .errors import BlockLocked, NotFound, RevisionConflict, RevisionGone, SchemaViolation
 from .jsonl import dump_line, load_json, load_jsonl

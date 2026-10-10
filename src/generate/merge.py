@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.core.models import block_snapshot
-from src.core.paths import Layout
 from src.core.text import new_block_id
 from src.core.store import DocMutation, DocStore, sort_blocks
 from src.core.text import normalize_text, utc_now_iso

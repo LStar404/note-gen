@@ -166,11 +166,10 @@ def check_latex(content: str) -> tuple[bool, list[str]]:
     ok = True
     for seg in segments:
         body = seg.strip()
-        end = None
         if body.startswith("$$") and body.endswith("$$") and len(body) > 4:
-            body, end = body[2:-2], "$$"
+            body = body[2:-2]
         elif body.startswith("$") and body.endswith("$") and len(body) > 2:
-            body, end = body[1:-1], "$"
+            body = body[1:-1]
         elif body.startswith("\\(") and body.endswith("\\)"):
             body = body[2:-2]
         elif body.startswith("\\[") and body.endswith("\\]"):

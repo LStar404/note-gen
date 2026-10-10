@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import create_app
 from src.core.paths import Layout
 from src.core.store import DocStore
 from src.generate.fill import fill_one
-from tests.integration.test_pipeline import CFG, make_client
 
 ROOT = Path(__file__).resolve().parents[2]
 

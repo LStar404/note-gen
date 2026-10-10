@@ -15,10 +15,8 @@ from .paths import (
     BLOCK_ID_RE,
     CHAPTER_ID_RE,
     DOC_ID_RE,
-    FIGURE_ID_RE,
     ANCHOR_ID_RE,
     REF_ID_RE,
-    REV_ID_RE,
 )
 from .text import normalize_text
 

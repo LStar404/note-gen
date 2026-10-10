@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import re
+import math
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
-from starlette.background import BackgroundTask
 
 from src.core.errors import ConflictError, InputError, NotFound
 from src.core.paths import DOC_ID_RE, FIGURE_ID_RE
@@ -56,7 +55,6 @@ async def create_doc(request: Request, file: UploadFile = File(...), title: str 
     if len(data) > 200 * 1024 * 1024:
         raise InputError("PDF 超过 200 MiB 限制")
     import hashlib
-    import secrets
 
     doc = doc_id or ("doc-" + hashlib.sha256(data).hexdigest()[:12])
     if not DOC_ID_RE.match(doc):
@@ -142,11 +140,27 @@ def page_blocks(request: Request, doc_id: str, page: int):
 def match_selection(request: Request, doc_id: str, body: dict):
     """选区匹配（6.3.2）；rects 为 PDF 用户空间坐标，v1 仅支持单页选区。"""
     st = state(request)
-    page = int(body.get("page", 0))
+    try:
+        page = int(body.get("page", 0) or 0)
+    except (TypeError, ValueError):
+        raise InputError("page 必须是整数")
     rects = body.get("rects") or []
     text = body.get("text") or ""
-    if not page or not rects:
-        raise InputError("请求体必须含 page 与 rects")
+    if page < 1 or not rects:
+        raise InputError("请求体必须含合法 page 与 rects")
+    # 选区矩形严格校验（6.3.2）：每项 [x0,y0,x1,y1] 有限数值，非法即 400 而非 500
+    clean_rects = []
+    for r in rects:
+        if not isinstance(r, (list, tuple)) or len(r) != 4:
+            raise InputError("rects 元素必须是 [x0,y0,x1,y1]")
+        try:
+            vals = [float(v) for v in r]
+        except (TypeError, ValueError):
+            raise InputError("rects 必须是数值")
+        if not all(math.isfinite(v) for v in vals):
+            raise InputError("rects 含非有限数值")
+        clean_rects.append(vals)
+    rects = clean_rects
     hits = queries.match_selection(st.layout, doc_id, page, rects, text, st.config)
     out = []
     for h in hits:

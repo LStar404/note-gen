@@ -11,8 +11,7 @@ import hashlib
 import re
 from pathlib import Path
 
-from src.core.paths import Layout
-from src.core.store import DocStore, sort_blocks
+from src.core.store import DocStore
 
 from .render import figure_index, live_blocks, rewrite_citations
 

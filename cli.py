@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from src.core.errors import InputError, NoteGenError  # noqa: E402
-from src.core.jsonl import load_jsonl, sha256_file  # noqa: E402
+from src.core.jsonl import sha256_file  # noqa: E402
 from src.core.llm import LLMClient  # noqa: E402
 from src.core.model_registry import ModelRegistry  # noqa: E402
 from src.core.paths import Layout  # noqa: E402

@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
 
-from src.core.errors import PipelineError, SchemaViolation
+from src.core.errors import SchemaViolation
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
-from .prompts import (FILL_PROMPT, OUTLINE_PROMPT, SYSTEM_PROMPT, anchor_summary_line,
+from .prompts import (OUTLINE_PROMPT, SYSTEM_PROMPT, anchor_summary_line,
                       build_outline_schema, language_instruction)
 from .validate_retry import parse_json_output, validate_outline_payload
 

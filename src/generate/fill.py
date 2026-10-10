@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
 
 from src.core.errors import SchemaViolation
 from src.core.llm import BudgetGuard, LLMClient

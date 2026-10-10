@@ -219,7 +219,7 @@ class LLMClient:
                                           temperature=temperature, tools=tools,
                                           tool_choice=tool_choice,
                                           context={"task": task, "doc_id": doc_id, "chapter_id": chapter_id})
-            except RetryableError as exc:
+            except RetryableError:
                 self.runtime.log_usage(
                     provider_id=provider_cfg["id"], model=model_name, task=task,
                     request_id=request_id, doc_id=doc_id, chapter_id=chapter_id,

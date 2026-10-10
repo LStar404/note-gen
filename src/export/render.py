@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
+from typing import Iterable
 
-from src.core.block_types import RELATION_CN, get_type
+from src.core.block_types import RELATION_CN
 
 # 输出语言标签（generate.output_language；导出与徽标文案）
 LANG_LABELS: dict[str, dict] = {
