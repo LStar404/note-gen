@@ -178,12 +178,20 @@ class DocStore:
         view_boxes = {p["page"]: p["view_box"] for p in self.manifest().get("pages", [])}
         seen: set[str] = set()
         for a in anchors.values():
-            validate_anchor(ParagraphAnchor.model_validate(a), view_boxes=view_boxes, seen_ids=seen)
+            try:
+                model = ParagraphAnchor.model_validate(a)
+            except Exception as exc:          # 字段类型/枚举不合法 → 统一 422
+                raise SchemaViolation(f"锚点数据非法: {exc}") from exc
+            validate_anchor(model, view_boxes=view_boxes, seen_ids=seen)
         anchor_ids = set(anchors)
         heading_ids = {a["anchor_id"] for a in anchors.values() if a.get("content_type") == "heading"}
         block_ids = {b["id"] for b in blocks}
         for b in blocks:
-            validate_block(NoteBlock.model_validate(b), anchor_ids=anchor_ids,
+            try:
+                model = NoteBlock.model_validate(b)
+            except Exception as exc:          # 字段类型/枚举不合法 → 统一 422
+                raise SchemaViolation(f"块数据非法: {exc}") from exc
+            validate_block(model, anchor_ids=anchor_ids,
                            heading_ids=heading_ids, block_ids=block_ids,
                            profile=self.manifest().get("profile", "textbook"))
             if check_quotes:

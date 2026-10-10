@@ -40,6 +40,26 @@ def create_app(root: str | Path | None = None, port: int | None = None) -> FastA
     async def _handle_error(request: Request, exc: NoteGenError):
         return JSONResponse(exc.to_dict(), status_code=exc.http_status)
 
+    # 意料之外的情况：字段类型非法（pydantic）→ 422；其它未捕获异常 → 500 JSON（不抛 HTML 堆栈）
+    try:
+        from pydantic import ValidationError
+
+        @app.exception_handler(ValidationError)
+        async def _handle_validation(request: Request, exc: ValidationError):
+            return JSONResponse({"error": "SCHEMA_VIOLATION", "message": str(exc)[:500],
+                                 "detail": {}}, status_code=422)
+    except Exception:  # pragma: no cover
+        pass
+
+    @app.exception_handler(Exception)
+    async def _handle_unexpected(request: Request, exc: Exception):
+        import logging
+
+        logging.getLogger("note-gen").exception("未捕获异常: %s", exc)
+        return JSONResponse({"error": "INTERNAL_ERROR",
+                             "message": f"{type(exc).__name__}: {str(exc)[:300]}",
+                             "detail": {}}, status_code=500)
+
     app.include_router(docs_routes.router)
     app.include_router(blocks_routes.router)
     app.include_router(system_routes.router)
