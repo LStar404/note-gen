@@ -318,3 +318,52 @@ def block_snapshot(block: NoteBlock | dict) -> dict:
 def quote_matches(anchor_content: str, quote: str) -> bool:
     """quote 必须是 normalize_text(anchor.content) 的连续子串（4.6.1）。"""
     return normalize_text(quote) in normalize_text(anchor_content) and bool(normalize_text(quote))
+
+
+def _strip_ws_map(s: str) -> tuple[str, list[int]]:
+    """去掉全部空白，并保留每个保留字符在原文中的下标（用于回切逐字片段）。"""
+    chars: list[str] = []
+    idx: list[int] = []
+    for i, ch in enumerate(s):
+        if not ch.isspace():
+            chars.append(ch)
+            idx.append(i)
+    return "".join(chars), idx
+
+
+def snap_quote(anchor_content: str, quote: str) -> str | None:
+    """把模型给出的 quote 吸附回锚点原文的逐字片段；失败返回 None（4.6.1）。
+
+    只做「定位」不做「放行」：返回值保证是 anchor_content 的连续子串，
+    因此写入 sources.quote 的永远是原文逐字文本——模型的空白差异、标点
+    融合、轻微改写都会被纠正到原文，定位不到（真编造）才由调用方判失败。
+    实测 ch08 有 22/61 块因模型改写 quote 被整块丢弃，是最大失败来源。
+    """
+    if not isinstance(quote, str) or not quote.strip() or not anchor_content:
+        return None
+    if quote_matches(anchor_content, quote):
+        return quote
+    cs, cidx = _strip_ws_map(anchor_content)
+    qs, _ = _strip_ws_map(quote)
+    if not qs:
+        return None
+    pos = cs.find(qs)                       # 空白不敏感的逐字命中（LaTeX 空格差异）
+    if pos >= 0:
+        return anchor_content[cidx[pos]: cidx[pos + len(qs) - 1] + 1]
+    # 允许少量改写/标点差异：以最长公共块为中心，扩到 quote 长度的原文窗口
+    import difflib
+
+    blocks = [b for b in difflib.SequenceMatcher(None, qs, cs, autojunk=False).get_matching_blocks()
+              if b.size >= 4]
+    if not blocks:
+        return None
+    best = max(blocks, key=lambda b: b.size)
+    if best.size < 0.6 * len(qs):
+        return None
+    span = min(len(qs), len(cs))
+    center = best.a + best.size // 2
+    start = max(0, min(center - span // 2, len(cs) - span))
+    end = min(len(cs), start + span)
+    if end <= start:
+        return None
+    return anchor_content[cidx[start]: cidx[end - 1] + 1][:300]

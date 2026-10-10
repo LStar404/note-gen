@@ -132,6 +132,40 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
         report["cache_hit"] = True
         candidates = cached.get("candidates", [])
         report["outline_complete"] = cached.get("outline_complete", True)
+        # 缓存里的失败候选必须重试：否则重跑同一章只是复读旧失败（一个块失败即永久失败）。
+        # 部分失败的章节尤其需要：缓存带着 22 个失败项时，用户点「生成本章」期望的是补齐而不是原样重报。
+        failed = [c for c in candidates if c.get("_status") == "failed" and c.get("temp_id")]
+        if failed and client is not None:
+            if progress:
+                progress({"stage": "fill_retry", "count": len(failed)})
+            retry_specs = [{"temp_id": c["temp_id"], "type": c.get("type"),
+                            "title": c.get("title", ""), "basis": c.get("basis", "anchored"),
+                            "sources": c.get("sources", []),
+                            "depends_on": c.get("depends_on", [])} for c in failed]
+            refilled = fill_all(client, doc_id=doc_id, chapter_id=chapter_id,
+                                outline_items=retry_specs, anchors_by_id=anchors_by_id,
+                                anchors=anchors, model=fill_model,
+                                config={**config, "_profile": profile},
+                                concurrency=int(config.get("generate", {}).get("concurrency", 2)),
+                                budget=None, task_id=task_id, progress=progress,
+                                is_cancelled=is_cancelled)
+            for c in candidates:
+                f = refilled.get(c["temp_id"])
+                if not f or f.get("_status") == "failed":
+                    continue
+                c["sources"] = _normalize_sources(f.get("sources_patch", c.get("sources", [])))
+                c["basis"] = f.get("basis", c.get("basis", "anchored"))
+                c["content"] = f.get("content", "")
+                c["content_format"] = f.get("content_format", "md_latex")
+                c["tags"] = f.get("tags", [])
+                c["_status"] = f.get("_status", "ok")
+                c["_errors"] = f.get("_errors", [])
+                c["status"] = "needs_review" if f.get("_status") == "needs_review" else "ai_generated"
+            if use_cache:
+                write_cache(layout, doc_id, chapter_id, key,
+                            {"candidates": candidates,
+                             "outline_complete": report["outline_complete"],
+                             "meta": {"prompt_version": PROMPT_VERSION}})
     else:
         if client is None:
             raise PipelineError("未配置 LLM 客户端，且无可用缓存")

@@ -17,8 +17,9 @@ generate:
     link: null
   outline_max_in: 32000
   fill_max_in: 8000
-  outline_max_out: 16000
-  fill_max_out: 6000
+  outline_max_out: 32000
+  fill_max_out: 12000
+  timeout: 600
   concurrency: 4
   max_cost_per_chapter: 0.0
   temperature: 0.2

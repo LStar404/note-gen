@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from src.core.errors import SchemaViolation
-from src.core.models import quote_matches, validate_type_constraints
+from src.core.models import snap_quote, validate_type_constraints
 
 MATH_PATTERN = re.compile(r"(\$\$.*?\$\$|\$.*?\$|\\\(.*?\\\)|\\\[.*?\\\])", re.DOTALL)
 _FENCE = chr(96) * 3
@@ -135,8 +135,13 @@ def validate_fill_payload(payload: dict, *, allowed_anchor_ids: set[str],
             raise SchemaViolation("quote 超过 300 字符")
         if check_quotes:
             anchor = anchors_by_id.get(src["anchor_id"])
-            if anchor is not None and not quote_matches(anchor.get("content", ""), str(src["quote"])):
-                raise SchemaViolation(f"quote 不匹配锚点原文: {src['anchor_id']}")
+            if anchor is not None:
+                # 4.6.1：先把 quote 吸附回原文逐字片段（模型空白/标点/轻微改写都被纠正），
+                # 真编造（定位不到）才判失败——否则整块被丢，实测 ch08 因此丢 22/61 块
+                fixed = snap_quote(anchor.get("content", ""), str(src["quote"]))
+                if fixed is None:
+                    raise SchemaViolation(f"quote 不匹配锚点原文: {src['anchor_id']}")
+                src["quote"] = fixed
     # 4.6.1 归一：同一 anchor_id 在一块内不得重复、sources ≤ 5。模型偶发重复/超量时
     # 就地去重截断（保留首次出现），否则要到 commit 才被 NoteBlock 校验拦下，整个章节失败。
     dedup: list[dict] = []
