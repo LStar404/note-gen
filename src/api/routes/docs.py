@@ -8,7 +8,8 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from src.core.errors import ConflictError, InputError, NotFound, TaskCancelled
+from src.core.errors import (ConflictError, InputError, NotFound,
+                             PipelineError, TaskCancelled)
 from src.core.paths import DOC_ID_RE, FIGURE_ID_RE
 from src.core.store import DocStore
 from src.db import queries
@@ -246,11 +247,27 @@ def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
             if is_cancelled():
                 raise TaskCancelled("任务已取消")
             progress({"stage": "generate", "chapter_id": ch})
-            reports.append(generate_chapter(doc_id, ch, layout=st.layout, client=st.client,
-                                            config=st.config, registry=st.registry, model=model,
-                                            merge_mode="merge", task_id=task_id,
-                                            progress=progress, is_cancelled=is_cancelled))
-        return {"reports": reports}
+            try:
+                reports.append(generate_chapter(doc_id, ch, layout=st.layout, client=st.client,
+                                                config=st.config, registry=st.registry, model=model,
+                                                merge_mode="merge", task_id=task_id,
+                                                progress=progress, is_cancelled=is_cancelled))
+            except (PipelineError, ConflictError) as exc:
+                # 4.7 PipelineError 语义：阶段性失败记录后继续其他章节——
+                # 一章缺锚点/提交冲突不得拖垮整本书的生成任务
+                reports.append({"doc_id": doc_id, "chapter_id": ch, "status": "failed",
+                                "failures": [{"stage": "generate", "reason": str(exc)}]})
+        if reports and all(r.get("status") == "failed" for r in reports):
+            # 全军覆没要以 failed 结局收场（10.4 可解释），不能谎报 succeeded
+            reasons = "；".join(
+                f"{r['chapter_id']}: " + ("; ".join(str(f.get("reason", "")) for f in r.get("failures", []))
+                                          or r.get("status"))
+                for r in reports)
+            raise PipelineError(f"全部章节生成失败：{reasons}"[:600])
+        # 章内块级失败（report status=partial）必须反映到任务结局：
+        # 原实现无条件返回 succeeded，22/61 块失败时任务盘照样亮绿灯
+        return {"reports": reports,
+                "partial": any(r.get("status") != "complete" for r in reports)}
 
     # 防重复触发：同文档已有排队/运行中的生成任务时直接复用（避免重复烧钱）。
     # 收紧为文档级而非章节级：并发跑两章 = 两个写者抢 data_revision（I7 单写者），
