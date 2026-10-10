@@ -58,3 +58,35 @@ def test_auto_falls_back_to_pypdf_when_heavy_parsers_missing():
 def test_unknown_parser_rejected():
     with pytest.raises(InputError):
         get_adapter("unknown-parser")
+
+
+def test_fallback_does_not_mask_input_errors(monkeypatch, tmp_path):
+    """解析回退只应处理解析器失败；InputError 必须直接报错即止（不得被兜底掩盖）。"""
+    import src.ingest.parse_pdf as pp
+    from src.core.errors import InputError as IE, PipelineError as PE
+
+    calls = []
+
+    def fake_parse(pdf_path, out_dir, parser="auto", **kw):
+        calls.append(parser)
+        if parser == "marker":
+            raise IE("doc_id 非法")
+        return {"doc_id": "x"}
+
+    monkeypatch.setattr(pp, "parse_pdf", fake_parse)
+    with pytest.raises(IE):
+        pp.parse_pdf_with_fallback("a.pdf", tmp_path, "marker")
+    assert calls == ["marker"], "InputError 不应回退重试"
+
+    calls.clear()
+
+    def fake_parse2(pdf_path, out_dir, parser="auto", **kw):
+        calls.append(parser)
+        if parser == "marker":
+            raise PE("解析器崩溃")
+        return {"doc_id": "x", "parser_fallback": True}
+
+    monkeypatch.setattr(pp, "parse_pdf", fake_parse2)
+    out = pp.parse_pdf_with_fallback("a.pdf", tmp_path, "marker")
+    assert out["parser_fallback"] is True
+    assert calls == ["marker", "pypdf"], "解析器失败应回退到 pypdf"

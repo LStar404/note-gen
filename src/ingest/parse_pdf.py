@@ -525,9 +525,15 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
 
 def parse_pdf_with_fallback(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto",
                             *, fallback: str = "pypdf", **kwargs) -> dict:
-    """解析失败自动降级（NFR-4）：记录告警并用兜底解析器重跑，manifest.parser 如实记录实际解析器。"""
+    """解析失败自动降级（NFR-4）：记录告警并用兜底解析器重跑，manifest.parser 如实记录实际解析器。
+
+    只回退"解析器失败"；InputError（参数/数据问题）必须直接报错即止，
+    否则会用兜底解析器把真正的输入错误掩盖成二次失败。
+    """
     try:
         return parse_pdf(pdf_path, out_dir, parser, **kwargs)
+    except InputError:
+        raise
     except Exception as exc:
         if parser in (fallback, "auto"):
             raise
