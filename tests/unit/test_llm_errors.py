@@ -136,3 +136,26 @@ def test_client_retries_transient_error_three_times(monkeypatch, app_state):
     with pytest.raises(RetryableError):
         app_state.client.complete("default", MSGS, max_tokens=8)
     assert stub.calls == 3, "瞬态错误应保留 3 次尝试"
+
+
+class CapturingAdapter:
+    """记录收到的 model 参数，用于验证传给供应商的是裸模型 id。"""
+
+    def __init__(self):
+        self.seen: list[str] = []
+
+    def complete(self, model, messages, schema, max_tokens, **kwargs):
+        self.seen.append(model)
+        return {"output": {"ok": True}, "usage": {"in": 1, "out": 1},
+                "request_id": "req_stub", "finish_reason": "stop"}
+
+
+def test_adapter_receives_bare_model_id_not_route_name(app_state):
+    cap = CapturingAdapter()
+    app_state.client.overrides["openai"] = cap
+
+    out = app_state.client.complete("default", MSGS, max_tokens=8)
+
+    # 路由全名 openai/gpt-4o-mini 只用于本地记账，不能出现在供应商 API 的 model 字段
+    assert cap.seen == ["gpt-4o-mini"], "路由全名被原样传给了供应商 API"
+    assert out["model"] == "openai/gpt-4o-mini" and out["provider_id"] == "openai"

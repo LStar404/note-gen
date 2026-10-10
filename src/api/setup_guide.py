@@ -261,7 +261,8 @@ def build_setup_status(state_obj) -> dict:
     parser_done = parser_avail.get(selected_parser, False)
     output_done = (gen_cfg.get("output_language") in OUTPUT_LANGUAGES
                    and (cfg.get("export", {}) or {}).get("encoding") in ENCODINGS)
-    budget_done = not unpriced
+    # 与 price 检查同口径：未启用成本上限时价格未知不阻塞（5.3.5 只约束非零预算）
+    budget_done = budget <= 0 or not unpriced
 
     done_map = {
         "env": env_done,

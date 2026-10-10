@@ -162,3 +162,32 @@ def test_setup_agent_slot_requires_tools(client):
     body = client.get("/api/v1/setup/status").json()
     levels = {c["id"]: c["level"] for c in body["checks"]}
     assert levels["agent_tools"] == "ok"
+
+
+def test_budget_step_agrees_with_price_check_when_budget_disabled(client):
+    """回归：未启用成本上限时，价格未知不得把「预算」步标成未完成。
+
+    旧实现 budget_done = not unpriced，与同一份报告里的 price 检查（budget=0 判 ok）
+    自相矛盾：用户看检查以为没问题，向导却显示预算步没完成。
+    """
+    client.put("/api/v1/models/deepseek", json={
+        "id": "deepseek", "protocol": "openai_compat", "base_url": "https://api.deepseek.com",
+        "api_key": "sk-test-1234", "api_key_env": None,
+        "models": [{"id": "deepseek-flash",
+                    "capabilities": {"json_schema": False, "tools": True, "vision": True}}],
+    })
+    assert client.put("/api/v1/model-routes",
+                      json={"default": "deepseek/deepseek-flash"}).status_code == 200
+
+    body = client.get("/api/v1/setup/status").json()
+    assert {c["id"]: c["level"] for c in body["checks"]}["price"] == "ok"
+    steps = {s["id"]: s for s in body["steps"]}
+    assert steps["budget"]["done"] is True          # 与 price 检查同口径
+    assert "价格未知" in steps["budget"]["detail"]  # 但仍如实标注
+
+    # 启用非零预算：价格未知必须拦下（5.3.5）→ price warn 且预算步未完成
+    assert client.put("/api/v1/settings",
+                      json={"generate": {"max_cost_per_chapter": 0.5}}).status_code == 200
+    body = client.get("/api/v1/setup/status").json()
+    assert {c["id"]: c["level"] for c in body["checks"]}["price"] == "warn"
+    assert {s["id"]: s for s in body["steps"]}["budget"]["done"] is False

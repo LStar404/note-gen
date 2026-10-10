@@ -21,7 +21,15 @@ class LLMProvider(Protocol):
     def complete(self, model: str, messages: list[dict], schema: dict | None,
                  max_tokens: int, temperature: float | None = None,
                  tools: list[dict] | None = None, tool_choice: str | dict | None = None,
-                 context: dict | None = None) -> dict: ...
+                 json_schema: bool = True, context: dict | None = None) -> dict: ...
+
+
+def _json_mode_messages(messages: list[dict]) -> list[dict]:
+    """json_object 模式要求提示里出现 "json" 字样（DeepSeek/Qwen 皆然），缺失时补一条系统指令。"""
+    if "json" in json.dumps(messages, ensure_ascii=False).lower():
+        return messages
+    return [*messages, {"role": "system",
+                        "content": "只输出一个合法的 json 对象：不要 markdown 代码围栏，不要任何解释。"}]
 
 
 class OpenAICompatAdapter:
@@ -37,17 +45,23 @@ class OpenAICompatAdapter:
     def complete(self, model: str, messages: list[dict], schema: dict | None,
                  max_tokens: int, temperature: float | None = None,
                  tools: list[dict] | None = None, tool_choice: str | dict | None = None,
-                 context: dict | None = None) -> dict:
+                 json_schema: bool = True, context: dict | None = None) -> dict:
         import httpx
 
         body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
             body["temperature"] = temperature
         if schema is not None:
-            body["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {"name": "response", "schema": schema, "strict": False},
-            }
+            if json_schema:
+                body["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {"name": "response", "schema": schema, "strict": False},
+                }
+            else:
+                # 能力标志 json_schema=false（如 DeepSeek）：上游对 json_schema 直接回 400
+                # "This response_format type is unavailable now"，只能退回 json_object
+                body["response_format"] = {"type": "json_object"}
+                body["messages"] = _json_mode_messages(messages)
         if tools:
             body["tools"] = tools
         if tool_choice is not None:
@@ -113,7 +127,7 @@ class DummyProvider:
     def complete(self, model: str, messages: list[dict], schema: dict | None,
                  max_tokens: int, temperature: float | None = None,
                  tools: list[dict] | None = None, tool_choice: str | dict | None = None,
-                 context: dict | None = None) -> dict:
+                 json_schema: bool = True, context: dict | None = None) -> dict:
         self.calls.append({"model": model, "messages": messages, "tools": tools,
                            "tool_choice": tool_choice, "schema": schema})
         item = self.responses.pop(0) if self.responses else {}
@@ -211,6 +225,10 @@ class LLMClient:
                  budget: BudgetGuard | None = None) -> dict:
         model_name = model or self.route(task)
         provider_cfg, model_cfg, adapter = self._provider_for(model_name)
+        # 路由名是 "provider/model"，供应商 API 只认裸模型 id
+        # （原实现把全名原样上传，DeepSeek 直接 400：but you passed deepseek/deepseek-flash）
+        api_model = (model_cfg or {}).get("id") or model_name
+        caps = self.registry.capabilities(model_name)
         limits = self.registry.limits(model_name)
         max_tokens = int(min(max_tokens, limits["max_output_tokens"]))
         self.registry.require_priced(model_name, budget.limit if budget else 0.0)
@@ -226,9 +244,10 @@ class LLMClient:
             attempts += 1
             request_id = "req_" + uuid.uuid4().hex[:16]
             try:
-                result = adapter.complete(model_name, messages, schema, max_tokens,
+                result = adapter.complete(api_model, messages, schema, max_tokens,
                                           temperature=temperature, tools=tools,
                                           tool_choice=tool_choice,
+                                          json_schema=bool(caps.get("json_schema")),
                                           context={"task": task, "doc_id": doc_id, "chapter_id": chapter_id})
             except RetryableError:
                 self.runtime.log_usage(
