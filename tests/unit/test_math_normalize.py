@@ -54,3 +54,31 @@ def test_validate_fill_payload_normalizes_math():
             "sources": []}
     out = validate_fill_payload(payload, allowed_anchor_ids=set(), anchors_by_id={}, spec=spec)
     assert out["content"].startswith("设 $" + BS + "lambda>0$")
+
+def test_display_row_break_backslash_n_becomes_double_backslash():
+    """模型把 aligned 行分隔 "\\" 写成字面反斜杠+n：环境失衡 → KaTeX 红字。"""
+    src = "$$" + NL + BS + "begin{aligned}" + NL + "a &= b " + BS + "n &" + BS + "le c" + NL + BS + "end{aligned}" + NL + "$$"
+    out = nm(src)
+    assert BS + BS + "n" not in out
+    assert "b " + BS + BS + " &" + BS + "le c" in out
+
+
+def test_inline_stray_backslash_n_kept_out_of_command_names():
+    """命令名里的 n（如 \\neq）不得被误伤。"""
+    src = "$a " + BS + "neq b$"
+    assert nm(src) == src
+
+
+def test_fint_expanded_to_portable_notation():
+    """KaTeX 未定义 \\fint → 展开为通用"积分加横杠"记号。"""
+    src = "$" + BS + "fint_D u" + BS + ",dA$"
+    out = nm(src)
+    assert BS + "fint" not in out
+    assert BS + "mathop{{" + BS + "int}" in out
+    assert out.endswith("_D u" + BS + ",dA$")
+
+
+def test_fint_expansion_idempotent():
+    src = "$" + BS + "fint u$"
+    assert nm(nm(src)) == nm(src)
+

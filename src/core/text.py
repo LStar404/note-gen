@@ -215,6 +215,20 @@ _FENCE_RE = re.compile(chr(96) * 3 + r"[\s\S]*?" + chr(96) * 3)
 _NL_BEFORE_WORD_RE = re.compile(r"\n(?=([A-Za-z]{2,}))")
 _DISPLAY_DELIMS = set("_^{([)]},")
 
+_B = chr(92)
+# 模型常把 aligned/array 的行分隔(双反斜杠)写成字面反斜杠+n（非命令名）：aligned 环境因此失衡
+_ROW_BREAK_NL_RE = re.compile("(?<!" + _B * 2 + ")" + _B * 2 + "n(?![A-Za-z])")
+# 平均积分 \fint：KaTeX 未定义 → 渲染红字。展开为纯 TeX 原语的"积分加横杠"记号，
+# KaTeX / MathJax / LaTeX 通用（\mathop 让上下标仍挂在算子上）
+_FINT_RE = re.compile(_B * 2 + "fint(?![A-Za-z])")
+_FINT_EXPANSION = _B + "mathop{{" + _B + "int}" + _B + "!" * 4 + "-}"
+# 希腊命令名后直接跟字母 = 未定义命令（KaTeX 红字）：中间补一个分隔空格。
+# 但 \\nulldelimiterspace / \\multicolumn / \\pitchfork 等是真实长命令，不得误伤。
+_GREEK_EXT_COMMANDS = {"nulldelimiterspace", "multicolumn", "multirow", "pitchfork"}
+_GLUED_GREEK_RE = re.compile(
+    _B * 2 + "(" + "|".join(sorted(GREEK_COMMANDS.values(), key=len, reverse=True)) + ")([A-Za-z]+)"
+)
+
 
 def _normalize_math_span(seg: str) -> str:
     display = seg.startswith("$$")
@@ -230,6 +244,9 @@ def _normalize_math_span(seg: str) -> str:
         return m.group(0)
 
     out = _NL_BEFORE_WORD_RE.sub(_nl, seg)
+    if display:
+        out = _ROW_BREAK_NL_RE.sub(lambda m: _B * 2, out)   # "\n" → 行分隔 "\\"
+    out = _FINT_RE.sub(lambda m: _FINT_EXPANSION, out)      # \fint → 通用记号
     if not display:
         out = out.replace("\n", " ")     # 行内公式不得跨行：否则 $ 配对错位
     # 裸希腊字母 → LaTeX 命令（\text{} 内是文本模式，保持不动）
@@ -242,7 +259,16 @@ def _normalize_math_span(seg: str) -> str:
     work = _TEXT_GROUP_RE.sub(_mask, out)
     for greek, name in GREEK_COMMANDS.items():
         if greek in work:
-            work = work.replace(greek, "\\" + name)
+            # 后随字母时必须留出分隔：否则 Δu → \\Deltau 会被当成一个未定义命令
+            work = re.sub(re.escape(greek) + r"(?=[A-Za-z])", lambda m: _B + name + " ", work)
+            work = work.replace(greek, _B + name)
+    # 反向修复：历史上粘连好的 \\Deltau（希腊命令名后直接跟字母）→ 命令 + 空格
+
+    def _unglue(m: "re.Match[str]") -> str:
+        word = m.group(1) + m.group(2)
+        return m.group(0) if word in _GREEK_EXT_COMMANDS else m.group(1) + " " + m.group(2)
+
+    work = _GLUED_GREEK_RE.sub(_unglue, work)
     for i, original in enumerate(protected):
         work = work.replace(chr(0) + str(i) + chr(0), original)
     return _JUNK_CHARS_RE.sub("", work)
