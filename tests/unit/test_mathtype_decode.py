@@ -40,6 +40,7 @@ def test_negation_slash_combines():
 def test_bigop_fragments():
     assert decode_glyph("MT2EXA", "backslash", 92) == "\u22c2"   # ⋂
     assert decode_glyph("MT2EXA", "bracketleft", 91) == "\u22c3"  # ⋃
+    assert decode_glyph("MT2EXA", "X", 88) == "\u2211"           # ∑（nXj=1 语境）
 
 
 def test_decode_mt2_text_from_extractor_chars():

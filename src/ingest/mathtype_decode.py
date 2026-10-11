@@ -47,6 +47,7 @@ MT2_RELATIONS: dict[str, str] = {
 MT2_BIGOPS: dict[str, str] = {
     "backslash": "\u22c2",    # \u22c2 大交（圆顶两腿，语境 \u22c2_{n=1}^{\u221e}F_n）
     "bracketleft": "\u22c3",  # \u22c3 大并（语境 \u22c3_\u03b3 D_\u03b3）
+    "X": "\u2211",            # \u2211 求和（上下分片拼合，语境 nXj=1 → \u2211_{j=1}^n）
 }
 
 # MT2SYT.six 是「否定斜杠」，画在被否定符号上（six,DC1→\u2262；six,two→\u2209）。
