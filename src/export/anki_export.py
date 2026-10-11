@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import html
 import re
 from pathlib import Path
 
@@ -42,7 +43,9 @@ def _back_html(block: dict, anchors_by_id: dict[str, dict]) -> str:
         page = (anchors_by_id.get(src["anchor_id"]) or {}).get("page")
         if page and page not in pages:
             pages.append(page)
-    content_html = content.replace("\n", "<br/>")
+    # 必须 HTML 转义：数学里的 <（R<\infty）会被当标签吞掉，Anki 渲染残缺。
+    # 实体在文本节点里被浏览器还原，MathJax 照常读到原始 <。
+    content_html = html.escape(content).replace("\n", "<br/>")
     footer = ("来源页码：" + "、".join(f"p.{p}" for p in pages)) if pages else "（AI 归纳，无来源页码）"
     return f"<div>{content_html}</div><hr/><div style='color:#666;font-size:12px'>{footer}</div>"
 
@@ -115,7 +118,7 @@ def export_anki(store: DocStore, chapter_id: str | None = None, *, out_dir: Path
     for card in cards:
         note = genanki.Note(
             model=model,
-            fields=[card["front"], card["back"],
+            fields=[html.escape(card["front"]), card["back"],
                     "、".join(f"p.{p}" for p in card["pages"]) or "-"],
             tags=[t.replace(" ", "_") for t in card["tags"] if t],
             guid=genanki.guid_for(store.doc_id, card["block_id"]),

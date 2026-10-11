@@ -70,10 +70,27 @@ def md_inline_to_tex(text: str) -> str:
 
 
 def md_block_to_tex(content: str) -> str:
-    """块级 Markdown → TeX：列表/段落 + 行内转换（基于 token 切分，不用单条正则替换）。"""
+    r"""块级 Markdown → TeX：列表/段落 + 行内转换（基于 token 切分，不用单条正则替换）。
+
+    跨行显示公式 $$...$$ 必须先整段切出透传：行级转换会把公式续行当文本
+    转义（\sum → \textbackslash{}sum），孤 $$ 还会生成空 equation* 环境。
+    """
     out: list[str] = []
     in_item = False
-    for line in content.split("\n"):
+    lines: list[str] = []
+    last = 0
+    for m in re.finditer(r"\$\$.+?\$\$", content, re.DOTALL):
+        lines.extend(content[last:m.start()].split("\n"))
+        lines.append("\x00EQ\x00" + m.group(0)[2:-2].strip())   # 整段公式哨兵行
+        last = m.end()
+    lines.extend(content[last:].split("\n"))
+    for line in lines:
+        if line.startswith("\x00EQ\x00"):
+            if in_item:
+                out.append(B + "end{itemize}")
+                in_item = False
+            out.append(B + "begin{equation*}" + line[4:] + B + "end{equation*}")
+            continue
         stripped = line.strip()
         if not stripped:
             if in_item:
@@ -96,7 +113,8 @@ def md_block_to_tex(content: str) -> str:
         if m:
             level = len(m.group(1))
             cmd = {1: "section", 2: "subsection", 3: "subsubsection"}.get(level, "paragraph")
-            out.append(B + cmd + "{" + tex_escape(m.group(2)) + "}")
+            # 标题里的行内数学必须受保护（$\log|f|$ 不能被转义成字面命令）
+            out.append(B + cmd + "{" + md_inline_to_tex(m.group(2)) + "}")
             continue
         out.append(md_inline_to_tex(stripped))
     if in_item:
@@ -127,7 +145,7 @@ def export_tex_chapter(store: DocStore, chapter_id: str, *, out_dir: Path,
                 level = h.split(" ")[0].count("#")
                 cmd = {1: "section", 2: "subsection"}.get(level, "subsubsection")
                 title = h.lstrip("#").strip()
-                body.append(B + cmd + "{" + tex_escape(title) + "}")
+                body.append(B + cmd + "{" + md_inline_to_tex(title) + "}")
                 prev_heading = block.get("heading_anchor_id")
 
         spec = get_type(block.get("type", "link"))
