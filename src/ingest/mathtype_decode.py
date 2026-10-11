@@ -57,7 +57,7 @@ def decode_glyph(font: str, glyph_name: str, ucs: int) -> str:
     回退字符若是控制字符（私有编码的未收录项，多为大定界符分片），
     丢弃比留垃圾更可读。
     """
-    ch = chr(ucs) if 0 < ucs < 0x10FFFF else ""
+    ch = chr(ucs) if 0 < ucs < 0x10FFFF and not 0xD800 <= ucs <= 0xDFFF else ""
     table = _MT2_FAMILIES.get(font or "")
     if table is not None:
         out = table.get(glyph_name, ch)
@@ -65,9 +65,9 @@ def decode_glyph(font: str, glyph_name: str, ucs: int) -> str:
         out = MSBM_MAP.get(glyph_name, ch)
     else:
         out = ch
-    o = ord(out) if out else 0
     # 未收录编码的回退值多为定界符分片/杂符号：控制字符与间距修饰符直接丢弃
-    if out and ((o < 0x20 and out not in "\t\n") or 0x02B0 <= o <= 0x02FF
-                or 0x0300 <= o <= 0x036F):
-        return ""
+    if len(out or "") == 1:
+        o = ord(out)
+        if (o < 0x20 and out not in "\t\n") or 0x02B0 <= o <= 0x02FF or 0x0300 <= o <= 0x036F:
+            return ""
     return out
