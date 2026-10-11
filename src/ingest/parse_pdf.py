@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -352,21 +353,35 @@ def _has_text_layer(reader, sample: int = 3, min_chars: int = 80) -> bool:
     return total / max(1, len(idxs)) >= min_chars
 
 
-def _text_quality_ok(reader, sample: int = 3, min_ratio: float = 0.85) -> bool:
-    """抽取质量探测：常规字符（ASCII/CJK/希腊/数学/常用标点）占比达标才算可用。
+# 逐字母空格化伪影（"T h e o r e m"）：pypdf 对某些字体 run 逐字符插空格，
+# 字符类别全是 ASCII，必须单独识别——否则锚点/引文满是碎字
+_GARBAGE_RUN = re.compile(r"(?:(?<=\s)|^)(?:[A-Za-z] ){3,}")
+
+
+def _spacing_garbage_runs(text: str) -> int:
+    return len(_GARBAGE_RUN.findall(text or ""))
+
+
+def _text_quality_ok(reader, sample: int = 9, min_ratio: float = 0.85,
+                     max_garbage_runs: int = 2) -> bool:
+    """抽取质量探测：常规字符占比达标 且 无逐字母空格化伪影 才算可用。
 
     中文 PDF 缺 ToUnicode 时 pypdf 会把汉字抽成孟加拉/格鲁吉亚等乱码块
-    （实测 FandolSong 字体的 LaTeX 书），文字层「有」但不可用——
-    这类书必须换保真抽取（pymupdf），否则锚点全是乱码。
+    （实测 FandolSong 字体的 LaTeX 书）；英文教材则常见逐字母空格化
+    （实测 Durrett《Probability: Theory and Examples》13/432 页）——
+    这两类都必须换保真抽取（pymupdf），否则锚点满是伪影。
     """
     n = len(reader.pages)
-    idxs = list(dict.fromkeys([0, n // 2, n - 1]))[:sample]
-    total = good = 0
+    idxs = [i for i in (0, n // 8, n // 4, n * 3 // 8, n // 2, n * 5 // 8,
+                        n * 3 // 4, n * 7 // 8, n - 1) if 0 <= i < n]
+    idxs = list(dict.fromkeys(idxs))[:sample]
+    total = good = garbage = 0
     for i in idxs:
         try:
             text = reader.pages[i].extract_text() or ""
         except Exception:
             continue
+        garbage += _spacing_garbage_runs(text)
         for ch in text:
             o = ord(ch)
             total += 1
@@ -377,7 +392,8 @@ def _text_quality_ok(reader, sample: int = 3, min_ratio: float = 0.85) -> bool:
                     or 0x2000 <= o <= 0x206F                             # 常用标点
                     or 0x2070 <= o <= 0x209F or 0x2200 <= o <= 0x22FF):  # 上下标/数学
                 good += 1
-    return total > 0 and good / total >= min_ratio
+    return (total > 0 and good / total >= min_ratio
+            and garbage <= max_garbage_runs)
 
 
 def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *,

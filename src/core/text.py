@@ -272,6 +272,58 @@ def normalize_math_text(content: str) -> str:
     return text
 
 
+# ---- 参考文本对齐排版修复（PDF 抽取伪影：词中空格化） ----
+def squash_key(s: str) -> tuple[str, list[int]]:
+    """对齐指纹：NFKC + casefold + 去空白，其余字符（含字形残留）保留。
+
+    保留字形残留是刻意的：pypdf 与 pymupdf 对同一公式字形给出不同的垃圾表示
+    （"/Omega1" vs "\x02"），保留它们才不会把两段不同排版误判为相同内容。
+    返回指纹与每个指纹字符在原串中的下标（用于把对齐结果映射回原文）。
+    """
+    chars: list[str] = []
+    idx: list[int] = []
+    for i, ch in enumerate(s or ""):
+        for norm in unicodedata.normalize("NFKC", ch):
+            if norm.isspace():
+                continue
+            chars.append(norm.casefold())
+            idx.append(i)
+    return "".join(chars), idx
+
+
+def respaces_from_reference(text: str, reference: str) -> str:
+    """用参考文本的排版替换 text 中被"逐字母空格化"的片段（内容一字不改）。
+
+    对齐指纹（去空白）相同的片段才用参考文本的写法替换；指纹不同的片段
+    （如两个解析器对同一公式字形给出的不同残留）原样保留。返回修复后的文本；
+    修复前后指纹必须一致（构造保证），否则原样返回。
+    """
+    sq_text, idx_text = squash_key(text)
+    sq_ref, idx_ref = squash_key(reference)
+    if not sq_text or not sq_ref:
+        return text
+    from difflib import SequenceMatcher
+
+    matcher = SequenceMatcher(None, sq_text, sq_ref, autojunk=False)
+    out: list[str] = []
+    last = 0
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            continue
+        start = idx_text[i1]
+        end = idx_text[i2 - 1] + 1
+        ref_start = idx_ref[j1]
+        ref_end = idx_ref[j2 - 1] + 1
+        out.append(text[last:start])
+        out.append(reference[ref_start:ref_end])
+        last = end
+    out.append(text[last:])
+    merged = "".join(out)
+    if squash_key(merged)[0] != sq_text:      # 安全闸门：内容不得有任何变化
+        return text
+    return merged
+
+
 def slugify(value: str, fallback: str = "doc") -> str:
     """doc_id 候选：仅 [a-z0-9-]，中文/空名用 fallback（4.2.1）。"""
     v = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode("ascii")
