@@ -5,6 +5,7 @@ import { useStore } from "../state/store";
 // 任务进度可读化（9.2 进度透传）：提纲 2/6 批、填充 3/20、生成 ch01
 function progressText(p: any): string {
   if (!p) return "";
+  if (p.stage === "outline_start") return "提纲 0/" + (p.batches ?? 0) + " 批";
   if (p.stage === "outline" && p.batches) return "提纲 " + (p.batch ?? 0) + "/" + p.batches + " 批";
   if (p.stage === "outline_done") return "提纲完成 " + (p.count ?? 0) + " 项";
   if (p.stage === "fill" && p.total) return "填充 " + (p.done ?? 0) + "/" + p.total;
@@ -14,11 +15,18 @@ function progressText(p: any): string {
   return String(p.stage ?? "");
 }
 
+// 已运行时长（任务启动体感）：任务一开始就有秒表在走，不再「点了没反应」
+function fmtElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+
 // 任务进度百分比（进度条）：按阶段映射，未知阶段返回 null（走无限动画）
 function progressPercent(kind: string, p: any): number | null {
   if (!p) return null;
   if (kind === "generate") {
     if (p.stage === "generate") return 4;
+    if (p.stage === "outline_start") return 6;
     if (p.stage === "outline" && p.batches) return 6 + Math.round(((p.batch ?? 0) / p.batches) * 26);
     if (p.stage === "outline_done") return 34;
     if (p.stage === "fill_retry") return 36;
@@ -102,11 +110,17 @@ export default function Toolbar() {
 
   // 任务进度/取消（9.2 /tasks/{id}）
   const track = (taskId: string, kind: string) => {
-    setTasks((list) => [...list, { task_id: taskId, kind, status: "queued", progress: {} }]);
+    setTasks((list) => [...list, { task_id: taskId, kind, status: "queued", progress: {},
+                                   startedAt: Date.now(), bestPct: 0 }]);
     const timer = window.setInterval(async () => {
       try {
         const t = await api.getTask(taskId);
-        setTasks((list) => list.map((x) => (x.task_id === taskId ? { ...x, ...t } : x)));
+        setTasks((list) => list.map((x) => {
+          if (x.task_id !== taskId) return x;
+          const pct = progressPercent(kind, t.progress);
+          // 进度只进不退：提纲/填充流水线阶段交错上报，瞬时 percent 可能回落
+          return { ...x, ...t, bestPct: Math.max(x.bestPct ?? 0, pct ?? 0) };
+        }));
         if (["succeeded", "failed", "partial", "cancelled", "interrupted"].includes(t.status)) {
           window.clearInterval(timer);
           timersRef.current.delete(timer);
@@ -380,12 +394,15 @@ export default function Toolbar() {
             >
               <span>
                 {t.kind} · {t.status}
+                {["queued", "running"].includes(t.status) && t.startedAt
+                  ? " · 已运行 " + fmtElapsed(Date.now() - t.startedAt)
+                  : ""}
                 {t.progress?.stage ? " · " + progressText(t.progress) : ""}
                 {t.status === "failed" && t.error?.message ? " · " + t.error.message : ""}
               </span>
               {["queued", "running"].includes(t.status) &&
                 (() => {
-                  const pct = progressPercent(t.kind, t.progress);
+                  const pct = (t.bestPct ?? 0) > 0 ? t.bestPct : null;
                   return (
                     <div
                       className={"progress" + (pct === null ? " indeterminate" : "")}

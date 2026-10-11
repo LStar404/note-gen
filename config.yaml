@@ -23,6 +23,9 @@ generate:
   fill_max_out: 12000
   timeout: 600
   concurrency: 6
+  # 提纲分批目标（预计输出 token/批）：批越小首批完成越快、填充越早开跑
+  # （任务「启动」体感）；实测 MiMo 单批 7k-16k 输出要 3-8 分钟
+  outline_batch_out: 8000
   # 整本生成时并行跑几章（写入仍按文档串行，不会互撞）
   chapter_concurrency: 2
   # 全局在途 LLM 请求上限（跨章节/跨任务共享）：防止并行分章把并发一次性

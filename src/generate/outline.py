@@ -64,12 +64,16 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
                      budget: BudgetGuard | None = None, task_id: str | None = None,
                      progress: Callable[[dict], None] | None = None,
                      is_cancelled: Callable[[], bool] | None = None,
+                     on_items: Callable[[list[dict]], None] | None = None,
                      _prefix: str = "b") -> OutlineResult:
     """逐批生成提纲。
 
     _prefix 是 temp_id 前缀：顶层 "b"，截断缩批递归带路径后缀（如 b0x1x0），
     保证跨调用全局唯一——temp_id 撞名会让 fill_all 把同名项折叠成一个、
     依赖错乱、块丢失（只在大章节截断缩批时触发，隐蔽且破坏性大）。
+
+    on_items：每批校验通过后立即回调该批条目（temp_id 已加前缀），
+    供引擎做「提纲/填充流水线」——首批一出就开始填充，不等整章提纲。
     """
     profile = manifest.get("profile", "textbook")
     chapter = next((c for c in manifest.get("chapters", []) if c["chapter_id"] == chapter_id), {})
@@ -77,18 +81,29 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
     gen_cfg = config.get("generate", {}) or {}
     max_in = int(gen_cfg.get("outline_max_in", 32000))
     max_out = int(gen_cfg.get("outline_max_out", 16000))
-    batches = _batch_anchors(anchors, max_in, max_out)
+    # 分批目标（提速「任务启动」）：实测 MiMo 单批输出 7k-16k tokens 要 3-8 分钟，
+    # 若全部提纲完成才开始填充，任务开头几分钟毫无动静。分批目标单独可调
+    # （outline_batch_out，默认 8000 ≈ 每批 60-70s），outline_max_out 仍是
+    # 防截断的 API max_tokens 上限——两者解耦，缩小分批不会带来截断风险。
+    batch_out = int(gen_cfg.get("outline_batch_out", 8000) or 8000)
+    batches = _batch_anchors(anchors, max_in, min(batch_out, max_out))
     result = OutlineResult(batches=len(batches))
+    if progress:
+        # 启动即报批次总数：任务一开始进度条就有明确去向，而不是干等首批完成
+        progress({"stage": "outline_start", "batches": len(batches)})
     anchor_ids = {a["anchor_id"] for a in anchors}
 
     def _run_batch(bi: int, batch: list[dict]) -> OutlineResult:
         prefix = f"{_prefix}{bi}"
         sub = OutlineResult()
+        # motivation 配额按批内锚点占比折算：分批变小后每批都喊「最多 6 个」
+        # 会让一章冒出几十个 motivation 块（意图是每章 ≤6）
+        n_motivation = max(1, min(6, round(6 * len(batch) / max(1, len(anchors)))))
         prompt = OUTLINE_PROMPT.format(
             doc_kind="论文" if profile == "paper" else "教材",
             book_title=manifest.get("title", ""),
             chapter_part="整篇" if profile == "paper" else f"第 {chapter.get('title', chapter_id)} 章",
-            n_motivation=6,
+            n_motivation=n_motivation,
             anchor_summaries="\n".join(anchor_summary_line(a) for a in batch),
             outline_schema=json.dumps(schema, ensure_ascii=False),
         ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
@@ -130,6 +145,7 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
                             client, doc_id=doc_id, chapter_id=chapter_id, manifest=manifest,
                             anchors=half, model=model, config=config, budget=budget,
                             task_id=task_id, progress=progress, is_cancelled=is_cancelled,
+                            on_items=on_items,
                             _prefix=f"{prefix}x{side}")
                         sub.items.extend(deep.items)
                         sub.complete = sub.complete and deep.complete
@@ -147,6 +163,8 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
                     item["depends_on"] = [f"{prefix}-{d}" if not d.startswith(prefix) else d
                                           for d in item["depends_on"]]
                 sub.items.extend(items)
+                if on_items and items:
+                    on_items(list(items))
                 return sub
             except SchemaViolation as exc:
                 if attempts >= 3:

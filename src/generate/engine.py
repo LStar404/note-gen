@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
@@ -190,27 +191,92 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
             raise PipelineError("未配置 LLM 客户端，且无可用缓存")
         budget = BudgetGuard(float(config.get("generate", {}).get("max_cost_per_chapter", 0.0) or 0.0))
         _check_cancel()
-        outline = generate_outline(client, doc_id=doc_id, chapter_id=chapter_id, manifest=manifest,
-                                   anchors=anchors, model=outline_model, config={**config, "_profile": profile},
-                                   budget=budget, task_id=task_id, progress=progress,
-                                   is_cancelled=is_cancelled)
-        report["outline_complete"] = outline.complete
-        report["outline_errors"] = outline.errors
-        if not outline.items:
-            report["status"] = "failed"
-            report["failures"].append({"stage": "outline", "reason": "; ".join(outline.errors) or "空提纲"})
-            _write_report(layout, doc_id, chapter_id, report)
-            return report
-        if progress:
-            progress({"stage": "outline_done", "count": len(outline.items)})
-        _check_cancel()
-        filled = fill_all(client, doc_id=doc_id, chapter_id=chapter_id,
-                          outline_items=outline.items, anchors_by_id=anchors_by_id,
-                          anchors=anchors, model=fill_model,
-                          config={**config, "_profile": profile},
-                          concurrency=int(config.get("generate", {}).get("concurrency", 2)),
-                          budget=budget, task_id=task_id, progress=progress,
-                          is_cancelled=is_cancelled)
+        fill_conc = int(config.get("generate", {}).get("concurrency", 2))
+        # 提纲/填充流水线（提速「任务启动」）：每批提纲校验通过即开始填充该批，
+        # 不等整章提纲完成——首条笔记的等待从「全部提纲 + 首次填充」缩到
+        # 「首批提纲 + 首次填充」。concurrency=1 语义是严格串行，不做重叠；
+        # depends_on 受校验约束只能指向同批 temp_id，逐批填充不破坏 5.3.1。
+        pipelined = fill_conc > 1
+        pipe_lock = threading.Lock()
+        filled_all: dict[str, dict] = {}
+        fill_state = {"total": 0}
+        batch_done: dict[int, int] = {}
+        fill_futs: list = []
+        batch_seq = [0]
+        fill_pool = (ThreadPoolExecutor(max_workers=max(1, min(4, fill_conc)))
+                     if pipelined else None)
+
+        def _fill_progress(idx: int):
+            def _p(evt: dict) -> None:
+                if (evt or {}).get("stage") != "fill":
+                    return
+                with pipe_lock:
+                    batch_done[idx] = int(evt.get("done") or 0)
+                    done = sum(batch_done.values())
+                    total = fill_state["total"]
+                if progress:
+                    progress({"stage": "fill", "done": done, "total": total})
+            return _p
+
+        def _run_fill(items: list[dict], idx: int) -> None:
+            out = fill_all(client, doc_id=doc_id, chapter_id=chapter_id,
+                           outline_items=items, anchors_by_id=anchors_by_id,
+                           anchors=anchors, model=fill_model,
+                           config={**config, "_profile": profile},
+                           concurrency=fill_conc, budget=budget, task_id=task_id,
+                           progress=_fill_progress(idx), is_cancelled=is_cancelled)
+            with pipe_lock:
+                filled_all.update(out)
+
+        def _on_items(items: list[dict]) -> None:
+            with pipe_lock:
+                idx = batch_seq[0]
+                batch_seq[0] += 1
+                fill_state["total"] += len(items)
+                done = sum(batch_done.values())
+                total = fill_state["total"]
+            if progress:
+                progress({"stage": "fill", "done": done, "total": total})
+            fill_futs.append(fill_pool.submit(_run_fill, items, idx))
+
+        try:
+            outline = generate_outline(client, doc_id=doc_id, chapter_id=chapter_id, manifest=manifest,
+                                       anchors=anchors, model=outline_model,
+                                       config={**config, "_profile": profile},
+                                       budget=budget, task_id=task_id, progress=progress,
+                                       is_cancelled=is_cancelled,
+                                       on_items=_on_items if pipelined else None)
+            report["outline_complete"] = outline.complete
+            report["outline_errors"] = outline.errors
+            if not outline.items:
+                if fill_pool is not None:
+                    fill_pool.shutdown(wait=True)
+                report["status"] = "failed"
+                report["failures"].append({"stage": "outline", "reason": "; ".join(outline.errors) or "空提纲"})
+                _write_report(layout, doc_id, chapter_id, report)
+                return report
+            if progress:
+                progress({"stage": "outline_done", "count": len(outline.items)})
+            _check_cancel()
+            if pipelined:
+                for fut in fill_futs:
+                    fut.result()      # 填充内意外异常在此冒泡（LLM 失败已按块隔离）
+                filled = filled_all
+            else:
+                filled = fill_all(client, doc_id=doc_id, chapter_id=chapter_id,
+                                  outline_items=outline.items, anchors_by_id=anchors_by_id,
+                                  anchors=anchors, model=fill_model,
+                                  config={**config, "_profile": profile},
+                                  concurrency=fill_conc, budget=budget, task_id=task_id,
+                                  progress=progress, is_cancelled=is_cancelled)
+        except BaseException:
+            if fill_pool is not None:
+                # 取消/异常：不等在途填充（它们会在下一个检查点自行退出）
+                fill_pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            if fill_pool is not None:
+                fill_pool.shutdown(wait=True)
         candidates = []
         for item in outline.items:
             f = filled.get(item["temp_id"], {})
