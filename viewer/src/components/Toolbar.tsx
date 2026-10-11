@@ -120,6 +120,11 @@ export default function Toolbar() {
   const [theme, setTheme] = useState<string>(
     () => localStorage.getItem("note-gen-theme") || "light"
   );
+  const [deleted, setDeleted] = useState<null | {
+    title: string;
+    removed: Record<string, number>;
+    trashedTo: string;
+  }>(null);
 
   const toggleTheme = () => {
     const next = theme === "light" ? "dark" : "light";
@@ -129,6 +134,7 @@ export default function Toolbar() {
   };
 
   return (
+    <>
     <header className="toolbar">
       <div className="brand">
         <span className="logo">📒</span>
@@ -183,11 +189,17 @@ export default function Toolbar() {
             if (!ok) return;
             void api
               .deleteDoc(docId)
-              .then(async () => {
+              .then(async (resp: any) => {
                 setToast("已删除《" + (doc?.title ?? docId) + "》，已移入回收站（data/.trash 可找回）");
                 useStore.setState({ docId: null, manifest: null, chapterId: null,
                                     blocks: [], selectedBlockId: null });
                 await loadDocs();
+                // 删除反馈（结果对话框）：删了什么、删到哪、能否找回，一次说清
+                setDeleted({
+                  title: doc?.title ?? docId,
+                  removed: resp?.removed ?? {},
+                  trashedTo: resp?.trashed_to ?? "data/.trash",
+                });
               })
               .catch((e: any) => setToast("删除失败：" + e.message));
           }}
@@ -255,5 +267,25 @@ export default function Toolbar() {
         </div>
       )}
     </header>
+      {deleted && (
+        <div className="modal-mask" onClick={() => setDeleted(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>删除完成</h2>
+            <p>
+              教材《{deleted.title}》已删除，其笔记块、锚点、历史与图资源一并移出列表。
+            </p>
+            <div className="muted">
+              <div>· 移除笔记块：{deleted.removed.blocks ?? 0} 个</div>
+              <div>· 移除锚点：{deleted.removed.anchors ?? 0} 个</div>
+              <div>· 移除章节：{deleted.removed.chapters ?? 0} 个</div>
+              <div>
+                · 回收站位置：<code>{deleted.trashedTo}</code>（未物理删除，可在磁盘找回）
+              </div>
+            </div>
+            <button onClick={() => setDeleted(null)}>知道了</button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
