@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.ingest.mathtype_decode import decode_glyph
+from src.ingest.mathtype_decode import combine_negations, decode_glyph, decode_mt2_text
 
 
 def test_symbol_family_decoding():
@@ -40,6 +40,36 @@ def test_negation_slash_combines():
 def test_bigop_fragments():
     assert decode_glyph("MT2EXA", "backslash", 92) == "\u22c2"   # ⋂
     assert decode_glyph("MT2EXA", "bracketleft", 91) == "\u22c3"  # ⋃
+
+
+def test_decode_mt2_text_from_extractor_chars():
+    """抽取器给的原始文本（字形名→AGL 字符）整段还原。"""
+    # MT2SYT: two→∈、D→=、six→否定斜杠；MT2MIT: period→(、slash→)、acute→ζ
+    assert decode_mt2_text("MT2SYT", "a2b") == "a\u2208b"
+    assert decode_mt2_text("ABCDEF+MT2MIT", "f.\u00b4/") == "f(\u03b6)"
+    assert decode_mt2_text("MT2SYT", "1D2") == "\u221e=\u2208"   # one→∞、D→=、two→∈
+    # 否定斜杠组合：six+DC1 → ≢（跨字形合成）
+    assert decode_mt2_text("MT2SYT", "x6" + chr(0x11) + "y") == "x\u2262y"
+    # 非数学字体原样
+    assert decode_mt2_text("FZSSK--GBK1-0", "中文 a2b") == "中文 a2b"
+    # U+FFFD（控制名字形占位）丢弃
+    assert decode_mt2_text("MT2SYT", "a\ufffdb") == "ab"
+
+
+def test_decode_mt2_text_combine_flag():
+    """combine=False 不做否定合成，供跨 span 拼接后统一处理。"""
+    parts = decode_mt2_text("MT2SYT", "6", combine=False)
+    parts += decode_mt2_text("MT2SYT", chr(0x11), combine=False)
+    assert combine_negations(parts) == "\u2262"
+
+
+def test_bigop_fragment_glyphs_dropped():
+    """MT2EXA 未登记字形是定界符分片：丢弃占位字符，不留垃圾。"""
+    assert decode_glyph("MT2EXA", "acute", 180) == ""
+    assert decode_glyph("MT2EXA", "at", 64) == ""
+    assert decode_glyph("ABCDEF+MT2EXA", "zero", 48) == ""
+    # 已登记大算符保留
+    assert decode_glyph("MT2EXA", "backslash", 92) == "\u22c2"
 
 
 def test_blackboard_and_unknown_fallback():

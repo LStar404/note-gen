@@ -55,6 +55,11 @@ def _write(obj: dict, req: dict | None = None) -> None:
 
 # --------------------------------------------------------------------------- 公共
 def _pages_meta_from_pdf(pdf_path: str) -> list[dict]:
+    """页面几何元数据：pypdf 优先，worker 环境无 pypdf 时用 pymupdf 兜底。
+
+    两个库的 y 轴约定相反（pypdf y 向上 / pymupdf y 向下），兜底时按
+    mediabox 高度翻转换算到 pypdf 约定，保证 view_box 语义一致。
+    """
     try:
         import pypdf
 
@@ -68,6 +73,26 @@ def _pages_meta_from_pdf(pdf_path: str) -> list[dict]:
             out.append({"view_box": view,
                         "user_unit": float(p.get("/UserUnit", 1.0) or 1.0),
                         "rotation": int(p.rotation or 0) % 360})
+        return out
+    except Exception:
+        pass
+    try:
+        import pymupdf  # noqa: F401  （fitz 同名包兼容）
+
+        try:
+            import pymupdf as fitz
+        except Exception:
+            import fitz
+        out = []
+        with fitz.open(pdf_path) as doc:
+            for page in doc:
+                mb = page.mediabox
+                flip = float(mb.y0) + float(mb.y1)   # y 向下 → 向上的换算和
+                cb = page.cropbox or mb
+                view = [float(cb.x0), flip - float(cb.y1), float(cb.x1), flip - float(cb.y0)]
+                out.append({"view_box": view,
+                            "user_unit": float(getattr(page, "user_unit", 1.0) or 1.0),
+                            "rotation": int(page.rotation or 0) % 360})
         return out
     except Exception:
         return []
@@ -450,6 +475,23 @@ def pix2text_recognize(req: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- pymupdf
+def _decode_spans(spans: list[dict]) -> str:
+    """行内 span 文本拼接 + MathType MT2 解码。
+
+    worker 以脚本方式运行（python src/ingest/parser_workers.py）时 src 包不在
+    sys.path，需显式引导仓库根；解码失败宁可抛错也不静默退回乱码。
+    """
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from src.ingest.mathtype_decode import combine_negations, decode_mt2_text
+    parts = [
+        decode_mt2_text(str(sp.get("font") or ""), sp.get("text", ""), combine=False)
+        for sp in spans
+    ]
+    return combine_negations("".join(parts))
+
+
 def _fitz_line_type(text: str, size: float, body: float) -> tuple[str, int]:
     """行级类型启发式：大字号→标题；数学符号密集且无中文→公式；其余段落。"""
     s = text.strip()
@@ -474,6 +516,9 @@ def pymupdf_extract(req: dict) -> dict:
 
     pdf_path = req["pdf_path"]
     pages_meta = req.get("pages_meta") or _pages_meta_from_pdf(pdf_path)
+    if not pages_meta:
+        # 两个库都取不到几何元数据时宁可失败也不静默返回 0 页（曾致整书抽取悄悄落空）
+        return {"ok": False, "parser": "pymupdf", "error": "无法读取页面几何元数据（pypdf/pymupdf 均不可用）"}
     warnings: list[str] = []
     pages: list[dict] = []
     try:
@@ -505,7 +550,9 @@ def pymupdf_extract(req: dict) -> dict:
                     continue
                 for ln in blk.get("lines", []):
                     spans = ln.get("spans", [])
-                    text = "".join(sp.get("text", "") for sp in spans).strip()
+                    # MathType MT2 字体：字形名错位（named two 画 ∈），抽取原样是乱码，
+                    # 逐 span 解码后按行合成否定斜杠（跨 span 组合）
+                    text = _decode_spans(spans).strip()
                     boxes = [sp.get("bbox") for sp in spans if sp.get("bbox")]
                     if not text or not boxes:
                         continue

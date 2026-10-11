@@ -81,6 +81,55 @@ _MT2_FAMILIES: dict[str, dict[str, str]] = {
 }
 
 
+# 抽取器（pymupdf/pypdf）给 MT2 字体的文本是「字形名 → AGL 字符」的原样输出
+# （named two 的字形抽出 '2'、named quotedbl 抽出 '"'），故按 AGL 反查字形名。
+# 只需覆盖各表涉及的字形名；字母的 AGL 名即其本身。
+_AGL_CHAR_TO_NAME: dict[str, str] = {
+    ".": "period", "/": "slash", ";": "semicolon", ":": "colon",
+    chr(34): "quotedbl", "'": "quotesingle", "\u00b4": "acute",
+    "\u00b9": "onesuperior", "\u00ba": "ordmasculine", "\u0131": "dotlessi",
+    "!": "exclam", "@": "at", "^": "asciicircum", "\\": "backslash",
+    "[": "bracketleft", "?": "question", "<": "less", ">": "greater",
+    "\u00a4": "currency", "\u2026": "ellipsis", "\u2020": "dagger",
+    "\u02d9": "dotaccent", "\u02c7": "caron", "\u02db": "ogonek",
+    "\u02dd": "hungarumlaut",
+    "0": "zero", "1": "one", "2": "two", "3": "three", "4": "four",
+    "5": "five", "6": "six", "7": "seven", "8": "eight", "9": "nine",
+    "\x00": "NUL", "\x01": "SOH", "\x02": "STX", "\x03": "ETX", "\x0d": "CR",
+    "\x10": "DLE", "\x11": "DC1", "\x12": "DC2", "\x13": "DC3", "\x14": "DC4",
+    "\x1a": "SUB", "\x1b": "ESC", "\x1e": "RS", "\x15": "NAK",
+}
+
+
+def glyph_name_of(ch: str) -> str:
+    """抽取字符 → AGL 字形名（字母/未收录字符原样返回）。"""
+    return _AGL_CHAR_TO_NAME.get(ch, ch)
+
+
+def decode_mt2_text(font: str, text: str, *, combine: bool = True) -> str:
+    """还原抽取器给出的 MT2 原始文本为真符号（生产抽取路径入口）。
+
+    font 可带子集前缀（如 ABCDEF+MT2MIT）；非 MT2/MSBM 字体原样返回。
+    U+FFFD 是控制名字形（NUL/DC1/…）的抽取占位，无法反查，直接丢弃。
+    combine=False 时不做否定斜杠合成——供跨 span 拼接后统一合成。
+    """
+    short = (font or "").split("+")[-1]
+    if not (_MT2_FAMILIES.get(short) or short.startswith("MSBM")):
+        return text
+    out = []
+    for ch in text:
+        if ch == "\ufffd":
+            continue
+        out.append(decode_glyph(short, glyph_name_of(ch), ord(ch)))
+    joined = "".join(out)
+    return combine_negations(joined) if combine else joined
+
+
+# MT2EXA 是大定界符分片字体：未登记字形是括号/大算符的视觉分片（´、@ 等 AGL 字符
+# 纯属占位），输出垃圾不如丢弃；已登记的 backslash/bracketleft 是完整大算符。
+_FRAGMENT_FONTS = {"MT2EXA"}
+
+
 def decode_glyph(font: str, glyph_name: str, ucs: int) -> str:
     """按 (字体, 字形名) 解码单个字形；未知项回退到抽取器给出的字符。
 
@@ -88,9 +137,12 @@ def decode_glyph(font: str, glyph_name: str, ucs: int) -> str:
     丢弃比留垃圾更可读。
     """
     ch = chr(ucs) if 0 < ucs < 0x10FFFF and not 0xD800 <= ucs <= 0xDFFF else ""
-    table = _MT2_FAMILIES.get(font or "")
+    short = (font or "").split("+")[-1]
+    table = _MT2_FAMILIES.get(short)
     if table is not None:
         out = table.get(glyph_name, ch)
+        if out == ch and short in _FRAGMENT_FONTS:
+            return ""      # 未登记分片：丢弃占位字符
     elif (font or "").startswith("MSBM"):
         out = MSBM_MAP.get(glyph_name, ch)
     else:
