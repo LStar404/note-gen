@@ -129,6 +129,9 @@ def validate_fill_payload(payload: dict, *, allowed_anchor_ids: set[str],
         v = payload.get(key)
         if isinstance(v, str):
             payload[key] = sanitize_control_chars(v)
+    # 死图占位符：不在本块来源里的 ![{fig}] 一律丢掉（前端只会拿到 404 隐形破图）
+    if isinstance(payload.get("content"), str):
+        payload["content"] = strip_placeholder_figures(payload["content"], spec)
     for field in ("content", "content_format", "tags", "sources_patch", "basis"):
         if field not in payload:
             raise SchemaViolation(f"fill 输出缺少必填字段 {field}")
@@ -192,6 +195,43 @@ def validate_sources_against_anchors(block_type: str, basis: str, sources: list[
     validate_type_constraints(block_type, basis=basis, source_count=len(sources))
 
 
+# KaTeX 未定义的"简写宏"：模型爱用 \F \E \Var \tr 这类简写，KaTeX 一律渲染成红字
+# （实测 katex 0.16：未定义命令走 mathcolor="#cc0000"）。这些不是语法错误，
+# pylatexenc 解析得过去，只能在闸门里按名单拦下并给出建议写法。
+# 注：\R \N \Z \H \S \P 在 KaTeX 里有定义，不在此列。
+UNDEFINED_MACROS: dict[str, str] = {
+    "F": r"\mathcal{F}", "E": r"\mathbb{E}", "C": r"\mathbb{C}", "Q": r"\mathbb{Q}",
+    "A": r"\mathcal{A}", "B": r"\mathcal{B}", "D": r"\mathcal{D}", "G": r"\mathcal{G}",
+    "I": r"\mathcal{I}", "J": r"\mathcal{J}", "K": r"\mathcal{K}", "L": r"\mathcal{L}",
+    "M": r"\mathcal{M}", "O": r"\mathcal{O}", "T": r"\mathcal{T}", "U": r"\mathcal{U}",
+    "V": r"\mathcal{V}", "W": r"\mathcal{W}", "X": r"\mathcal{X}", "Y": r"\mathcal{Y}",
+    "Var": r"\operatorname{Var}", "Cov": r"\operatorname{Cov}", "tr": r"\operatorname{tr}",
+    "rank": r"\operatorname{rank}", "diag": r"\operatorname{diag}",
+    "im": r"\operatorname{im}", "span": r"\operatorname{span}",
+    "grad": r"\nabla", "Prob": r"\mathbb{P}", "Ex": r"\mathbb{E}",
+    "ind": r"\mathbf{1}", "vol": r"\operatorname{vol}", "KL": r"D_{\mathrm{KL}}",
+}
+_MACRO_RE = re.compile(r"\\([A-Za-z]+)")
+
+# 图占位符：模型在没有真实 figure_id 时会写 ![{fig}] 占位（历史上填成 fig_00000000），
+# 前端只会得到一个 404 隐形破图。闸门统一丢掉「不在本块来源里」的图引用。
+_FIG_PLACEHOLDER_RE = re.compile(r"[ \t]*!\[(fig_\d{8})\][ \t]*\n*")
+
+
+def _allowed_figure_ids(spec: dict) -> set[str]:
+    return {s.get("figure_id") for s in (spec.get("sources") or []) if s.get("figure_id")}
+
+
+def strip_placeholder_figures(content: str, spec: dict) -> str:
+    """删除引用不到真实图资源的 ![{fig_id}] 占位符（保留图注与解读文字）。"""
+    allowed = _allowed_figure_ids(spec)
+
+    def _sub(m: "re.Match[str]") -> str:
+        return m.group(0) if m.group(1) in allowed else ""
+
+    return _FIG_PLACEHOLDER_RE.sub(_sub, content or "")
+
+
 # ---- LaTeX 语法闸门（5.3.3，v1.5） ----
 def extract_math_segments(content: str) -> list[str]:
     text = CODE_FENCE.sub("", content or "")
@@ -226,4 +266,11 @@ def check_latex(content: str) -> tuple[bool, list[str]]:
         if body.count("{") != body.count("}"):
             ok = False
             warnings.append(f"花括号不配对: {seg[:40]}")
+        # 未定义宏：KaTeX 渲染成红字，用户看到的就是"公式坏了"（pylatexenc 解析得过去，
+        # 必须在闸门里按名单拦下，并给出建议写法供模型自我修正）
+        for name in dict.fromkeys(_MACRO_RE.findall(body)):
+            if name in UNDEFINED_MACROS:
+                ok = False
+                warnings.append(f"未定义命令 \\{name}（KaTeX 渲染为红字），请改用 "
+                                f"{UNDEFINED_MACROS[name]}")
     return ok, warnings
