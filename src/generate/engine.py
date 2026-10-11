@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -18,6 +19,25 @@ from .fill import fill_all
 from .merge import merge_candidates
 from .outline import generate_outline
 from .prompts import PROMPT_VERSION
+
+
+# 进程内按 (workspace, doc) 串行「读基线→merge→commit→link」（4.2.2 单写者）。
+# 整本生成时各章 outline/fill 并行跑以提速，但写入必须排队：两章同时提交会让
+# 后到者拿旧 data_revision 撞 RevisionConflict，白烧一章的 LLM 调用。
+# 用户并发改动仍由 CAS 兜底：基线在锁内读取，锁外的用户提交要么先落（被 merge
+# 读到）、要么后落（撞 CAS 由用户重试），不会互相吞掉。
+_COMMIT_LOCKS: dict[str, threading.Lock] = {}
+_COMMIT_LOCKS_GUARD = threading.Lock()
+
+
+def _commit_lock(layout: Layout, doc_id: str) -> threading.Lock:
+    key = f"{layout.root}|{doc_id}"
+    with _COMMIT_LOCKS_GUARD:
+        lock = _COMMIT_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _COMMIT_LOCKS[key] = lock
+        return lock
 
 
 def _derive_heading_and_order(items: list[dict], anchors: list[dict], chapter_id: str) -> list[dict]:
@@ -214,36 +234,38 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
         c["sources"] = _normalize_sources(c.get("sources"))
 
     candidates = _derive_heading_and_order(candidates, anchors, chapter_id)
-    # CAS 基线取在 merge 读取时刻（I7/11.6.3）：outline+fill 可达十几分钟，
-    # 若基线取在生成开始，期间用户随手编辑一块就让整章提交 Conflict、
-    # 几十次 LLM 调用全部作废；merge 本就是按当前状态设计的（保护块跳过），
-    # 用 merge 时刻的 revision 既不丢用户并发改动、又不误伤在途生成。
-    base_revision = store.data_revision()
-    # 失败候选必须交给合并器：保留对应旧块并进报告，不能据此删除（5.7 第 1 条）
-    mutation, merge_report = merge_candidates(store, chapter_id, candidates,
-                                              mode=merge_mode,
-                                              outline_complete=report["outline_complete"])
-    report.update({k: v for k, v in merge_report.items() if k != "temp_to_id"})
-    if merge_report.get("failures"):
-        report["status"] = "partial"
+    # 写入段整体按文档串行（_commit_lock）：并行分章时两章的 merge/commit/link
+    # 排队执行，避免互撞 RevisionConflict。CAS 基线取在 merge 读取时刻（I7/11.6.3）：
+    # outline+fill 可达十几分钟，若基线取在生成开始，期间用户随手编辑一块就让
+    # 整章提交 Conflict、几十次 LLM 调用全部作废；merge 本就是按当前状态设计的
+    # （保护块跳过），用 merge 时刻的 revision 既不丢用户并发改动、又不误伤在途生成。
+    with _commit_lock(layout, doc_id):
+        base_revision = store.data_revision()
+        # 失败候选必须交给合并器：保留对应旧块并进报告，不能据此删除（5.7 第 1 条）
+        mutation, merge_report = merge_candidates(store, chapter_id, candidates,
+                                                  mode=merge_mode,
+                                                  outline_complete=report["outline_complete"])
+        report.update({k: v for k, v in merge_report.items() if k != "temp_to_id"})
+        if merge_report.get("failures"):
+            report["status"] = "partial"
 
-    _check_cancel()
-    try:
-        store.commit(mutation, base_revision=base_revision, sync_backlinks=True)
-    except RevisionConflict as exc:
-        report["status"] = "failed"
-        report["failures"].append({"stage": "commit", "reason": exc.message})
-        _write_report(layout, doc_id, chapter_id, report)
-        raise
+        _check_cancel()
+        try:
+            store.commit(mutation, base_revision=base_revision, sync_backlinks=True)
+        except RevisionConflict as exc:
+            report["status"] = "failed"
+            report["failures"].append({"stage": "commit", "reason": exc.message})
+            _write_report(layout, doc_id, chapter_id, report)
+            raise
 
-    # 链接阶段（5.4）：本章块出链与反向索引全量校验
-    try:
-        from src.link.backlink import link_doc
+        # 链接阶段（5.4）：本章块出链与反向索引全量校验（同锁内：link 自带 CAS 提交）
+        try:
+            from src.link.backlink import link_doc
 
-        link_report = link_doc(doc_id, chapter_id=chapter_id, layout=layout)
-        report["link"] = link_report
-    except Exception as exc:  # 链接失败不影响已提交块
-        report["link"] = {"error": str(exc)}
+            link_report = link_doc(doc_id, chapter_id=chapter_id, layout=layout)
+            report["link"] = link_report
+        except Exception as exc:  # 链接失败不影响已提交块
+            report["link"] = {"error": str(exc)}
 
     if report.get("failures") or merge_report.get("failures"):
         report["status"] = "partial"

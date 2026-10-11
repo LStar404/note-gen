@@ -252,8 +252,14 @@ select:focus, input:focus, textarea:focus {
   border-radius: 6px; box-shadow: 0 8px 30px rgba(16, 24, 40, .18);
 }
 .pdf-page canvas { display: block; }
-.text-layer { position: absolute; inset: 0; overflow: hidden; opacity: .22; line-height: 1; }
-.text-layer span { position: absolute; white-space: pre; transform-origin: 0 0; cursor: text; }
+/* 文字层只服务选区/复制：字形必须透明——半透明可见的文字层用浏览器字体
+   叠在画布字形上，只要基线/字距略有偏差就是肉眼可见的“重影” */
+.text-layer { position: absolute; inset: 0; overflow: hidden; line-height: 1; }
+.text-layer span {
+  position: absolute; white-space: pre; transform-origin: 0 0; cursor: text;
+  color: transparent;
+}
+.text-layer span::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
 .highlight-layer { position: absolute; inset: 0; pointer-events: none; }
 .highlight { position: absolute; border-radius: 4px; }
 .highlight.pulse { animation: pulse 2s ease-out; }
@@ -481,7 +487,22 @@ button:active, .file-button:active { box-shadow: none; }
   font-size: 13px; margin: 6px 0 4px; letter-spacing: .2px;
 }
 .block-preview p { margin: 5px 0; }
-.block-preview .katex { font-size: .98em; }
+
+/* 预览视图的 markdown 标题：不吃浏览器默认 2em/1.5em——
+   标题里的数学（L/K、Z/pZ 这类带 / 的式子）会被放得过大 */
+.block-preview-view h1 { font-size: 15.5px; margin: 12px 0 6px; }
+.block-preview-view h2 { font-size: 14.5px; margin: 10px 0 5px; }
+.block-preview-view h3 { font-size: 13.5px; margin: 9px 0 4px; }
+.block-preview-view h4, .block-preview-view h5, .block-preview-view h6 {
+  font-size: 13px; margin: 8px 0 4px;
+}
+.block-preview-view h1, .block-preview-view h2, .block-preview-view h3 { letter-spacing: .2px; }
+
+/* KaTeX 自带 1.21em 是按拉丁正文校准的，中文字面框里显大（标题里的 / 最刺眼）：
+   压回 1em 与汉字同高，标题内再略收一档 */
+.block-preview .katex, .block-preview-view .katex { font-size: 1em; }
+.block-preview-view h1 .katex, .block-preview-view h2 .katex,
+.block-preview-view h3 .katex { font-size: .93em; }
 .block-preview .katex-display { margin: 6px 0; overflow-x: auto; overflow-y: hidden; }
 .block-preview img { max-width: 100%; border-radius: 6px; margin: 4px 0; }
 

@@ -23,6 +23,11 @@ generate:
   fill_max_out: 12000
   timeout: 600
   concurrency: 6
+  # 整本生成时并行跑几章（写入仍按文档串行，不会互撞）
+  chapter_concurrency: 2
+  # 全局在途 LLM 请求上限（跨章节/跨任务共享）：防止并行分章把并发一次性
+  # 打到「章数 × 章内并发」触发限流，反而被退避拖慢
+  max_concurrent_requests: 8
   # 推理深度：low/medium/high（推理型模型思考越深越慢；low 提速明显，
   # 复杂章节若质量不足可改 medium）
   reasoning_effort: low

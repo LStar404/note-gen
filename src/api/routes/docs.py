@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
@@ -404,30 +405,85 @@ def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
 
         store = DocStore(st.layout, doc_id)
         chapters = [chapter_id] if chapter_id else store.chapter_ids()
-        reports = []
-        for ch in chapters:
+        # 并行分章（提速）：整本生成时多章同时跑 outline/fill，写入由引擎内
+        # per-doc 锁串行（4.2.2 单写者），不会互撞 RevisionConflict
+        workers = 1
+        if len(chapters) > 1:
+            workers = int(st.config.get("generate", {}).get("chapter_concurrency", 2) or 2)
+            workers = max(1, min(workers, len(chapters)))
+
+        # 跨章进度聚合：并行时各章同时上报 outline/fill，直接透传进度条会来回跳，
+        # 按章累计后合并成全局 done/total，保证单调推进
+        agg: dict[str, dict] = {}
+        agg_lock = threading.Lock()
+
+        def make_progress(ch: str):
+            def _p(evt: dict) -> None:
+                evt = dict(evt or {})
+                stage = evt.get("stage")
+                with agg_lock:
+                    if stage in ("outline", "fill"):
+                        agg.setdefault(ch, {})[stage] = evt
+                        rows = [x.get(stage) for x in agg.values() if x.get(stage)]
+                        if stage == "outline":
+                            progress({"stage": "outline",
+                                      "batch": sum(r.get("batch") or 0 for r in rows),
+                                      "batches": sum(r.get("batches") or 0 for r in rows),
+                                      "chapter_id": ch})
+                            return
+                        progress({"stage": "fill",
+                                  "done": sum(r.get("done") or 0 for r in rows),
+                                  "total": sum(r.get("total") or 0 for r in rows),
+                                  "chapter_id": ch})
+                        return
+                    evt.setdefault("chapter_id", ch)
+                    progress(evt)
+            return _p
+
+        def failed_report(ch: str, reason: str) -> dict:
+            return {"doc_id": doc_id, "chapter_id": ch, "status": "failed",
+                    "failures": [{"stage": "generate", "reason": reason}]}
+
+        def outcome(ch: str) -> dict:
+            """执行一章；可隔离的失败转成失败报告，不可隔离的继续上抛。"""
             if is_cancelled():
                 raise TaskCancelled("任务已取消")
             progress({"stage": "generate", "chapter_id": ch})
             try:
-                reports.append(generate_chapter(doc_id, ch, layout=st.layout, client=st.client,
-                                                config=st.config, registry=st.registry, model=model,
-                                                merge_mode="merge", task_id=task_id,
-                                                progress=progress, is_cancelled=is_cancelled))
+                return generate_chapter(doc_id, ch, layout=st.layout, client=st.client,
+                                        config=st.config, registry=st.registry, model=model,
+                                        merge_mode="merge", task_id=task_id,
+                                        progress=make_progress(ch), is_cancelled=is_cancelled)
             except TaskCancelled:
                 raise
             except PriceUnknown as exc:
                 if exc.code != "BUDGET_EXCEEDED":
                     raise        # 配置类（未配置模型/价格未知）→ 整个任务清晰失败
-                reports.append({"doc_id": doc_id, "chapter_id": ch, "status": "failed",
-                                "failures": [{"stage": "generate", "reason": str(exc)}]})
+                return failed_report(ch, str(exc))
             except NoteGenError as exc:
                 # 4.7 PipelineError 语义：阶段性失败记录后继续其他章节——
                 # 一章缺锚点/提交冲突/校验失败不得拖垮整本书的生成任务
                 # （原实现只隔离 PipelineError/ConflictError，一章 quote 校验
                 # 失败会让后面所有章节连跑的机会都没有）
-                reports.append({"doc_id": doc_id, "chapter_id": ch, "status": "failed",
-                                "failures": [{"stage": "generate", "reason": str(exc)}]})
+                return failed_report(ch, str(exc))
+
+        reports: list[dict] = []
+        if workers <= 1:
+            for ch in chapters:
+                reports.append(outcome(ch))
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            by_ch: dict[str, dict] = {}
+            pool = ThreadPoolExecutor(max_workers=workers)
+            try:
+                futs = {pool.submit(outcome, ch): ch for ch in chapters}
+                for fut in as_completed(futs):
+                    by_ch[futs[fut]] = fut.result()
+            finally:
+                # 取消/意外异常：不再等未完成章节（它们会在下一个检查点自行退出）
+                pool.shutdown(wait=False, cancel_futures=True)
+            reports = [by_ch[ch] for ch in chapters if ch in by_ch]
         if reports and all(r.get("status") == "failed" for r in reports):
             # 全军覆没要以 failed 结局收场（10.4 可解释），不能谎报 succeeded
             reasons = "；".join(
@@ -441,8 +497,9 @@ def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
                 "partial": any(r.get("status") != "complete" for r in reports)}
 
     # 防重复触发：同文档已有排队/运行中的生成任务时直接复用（避免重复烧钱）。
-    # 收紧为文档级而非章节级：并发跑两章 = 两个写者抢 data_revision（I7 单写者），
+    # 收紧为文档级而非章节级：两个生成任务并跑 = 两个写者抢 data_revision（I7 单写者），
     # 后提交者必 RevisionConflict，白烧一章的 LLM 费用（probe3 实测两任务并跑）。
+    # 注：单任务内的多章并行是安全的——写入段由引擎内 per-doc 锁串行（4.2.2）。
     for t in st.runtime.list_tasks(doc_id=doc_id):
         if t.get("kind") == "generate" and t.get("status") in ("queued", "running"):
             return JSONResponse({"task_id": t["task_id"]}, status_code=202)

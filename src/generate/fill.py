@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import json
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Callable
 
 from src.core.errors import (LLMError, PriceUnknown, RetryableError,
@@ -144,37 +143,48 @@ def fill_all(client: LLMClient, *, doc_id: str, chapter_id: str, outline_items: 
              task_id: str | None = None,
              progress: Callable[[dict], None] | None = None,
              is_cancelled: Callable[[], bool] | None = None) -> dict[str, dict]:
-    """按依赖分批并行填充；严格保证 depends_on 目标先于依赖者完成（5.3.1）。"""
+    """按依赖连续调度并行填充；严格保证 depends_on 目标先于依赖者完成（5.3.1）。
+
+    调度是连续的而非「按波次」：依赖一完成，后继块立即占坑开跑。
+    旧实现每波建一个线程池、整波做满才放行下一波——一个慢块会把所有
+    已就绪的后继拖进下一波，链式依赖章节的填充被无谓串行（提速回归点）。
+    """
     by_id = {i["temp_id"]: dict(i) for i in outline_items}
     total = len(outline_items)
-    filled: dict[str, dict] = {}
-    semaphore = threading.Semaphore(max(1, int(concurrency)))
-    lock = threading.Lock()
+    filled: dict[str, dict] = {}      # 只由调度线程写入，无需加锁
 
-    def run(spec: dict) -> tuple[str, dict]:
+    def run(spec: dict) -> dict:
         if is_cancelled and is_cancelled():
             raise TaskCancelled("任务已取消")
-        with semaphore:
-            related = [by_id[d]["title"] for d in spec.get("depends_on", []) if d in by_id]
-            out = fill_one(client, doc_id=doc_id, chapter_id=chapter_id, spec=spec,
-                           anchors_by_id=anchors_by_id, anchors=anchors, model=model,
-                           config=config, related_titles=related, budget=budget, task_id=task_id)
-        return spec["temp_id"], out
+        related = [by_id[d]["title"] for d in spec.get("depends_on", []) if d in by_id]
+        return fill_one(client, doc_id=doc_id, chapter_id=chapter_id, spec=spec,
+                        anchors_by_id=anchors_by_id, anchors=anchors, model=model,
+                        config=config, related_titles=related, budget=budget, task_id=task_id)
 
-    pending = [dict(i) for i in outline_items]
-    while pending:
-        ready = [i for i in pending if all(d in filled for d in i.get("depends_on", []))]
-        if not ready:
-            # 环形/失效依赖：剩余块置后重排，逐个填充
-            ready = pending[:1]
-        with ThreadPoolExecutor(max_workers=max(1, int(concurrency))) as pool:
-            futures = [pool.submit(run, spec) for spec in ready]
-            for fut in as_completed(futures):
-                tid, out = fut.result()
-                with lock:
-                    filled[tid] = out
+    pending: dict[str, dict] = {i["temp_id"]: dict(i) for i in outline_items}
+    known = set(pending)
+    # 失效依赖（指向不存在的 temp_id）不构成等待条件，否则永远等不到就绪
+    deps = {tid: set(i.get("depends_on", [])) & known for tid, i in pending.items()}
+    done_ids: set[str] = set()
+    futures: dict = {}
+
+    with ThreadPoolExecutor(max_workers=max(1, int(concurrency))) as pool:
+        def submit_ready() -> None:
+            for tid in [t for t in list(pending) if deps[t] <= done_ids]:
+                futures[pool.submit(run, pending.pop(tid))] = tid
+
+        submit_ready()
+        while pending or futures:
+            if not futures:
+                # 环形依赖兜底：剩余块按序逐个放行（与旧实现语义一致）
+                tid = next(iter(pending))
+                futures[pool.submit(run, pending.pop(tid))] = tid
+            finished, _ = wait(set(futures), return_when=FIRST_COMPLETED)
+            for fut in finished:
+                tid = futures.pop(fut)
+                filled[tid] = fut.result()   # run 返回填充载荷；取消/意外异常在此冒泡
+                done_ids.add(tid)
                 if progress:
                     progress({"stage": "fill", "done": len(filled), "total": total})
-        ready_ids = {i["temp_id"] for i in ready}
-        pending = [i for i in pending if i["temp_id"] not in ready_ids]
+            submit_ready()
     return filled

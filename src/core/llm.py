@@ -213,6 +213,11 @@ class LLMClient:
         self.timeout = float((config.get("generate", {}) or {}).get("timeout", 600.0))
         # 推理深度（generate.reasoning_effort）：low/medium/high，空=供应商默认
         self.reasoning_effort = (config.get("generate", {}) or {}).get("reasoning_effort") or None
+        # 全局在途请求总闸（generate.max_concurrent_requests，默认 8）：
+        # 并行分章后「章数 × 章内并发」会一次性打出十几个并发请求，
+        # 触发供应商限流反而被退避拖慢——按信号量把总并发钉在上限内
+        self._slots = threading.BoundedSemaphore(
+            max(1, int((config.get("generate", {}) or {}).get("max_concurrent_requests", 8) or 8)))
 
     # ---- 路由 ----
     def route(self, task: str) -> str:
@@ -261,12 +266,13 @@ class LLMClient:
             attempts += 1
             request_id = "req_" + uuid.uuid4().hex[:16]
             try:
-                result = adapter.complete(api_model, messages, schema, max_tokens,
-                                          temperature=temperature, tools=tools,
-                                          tool_choice=tool_choice,
-                                          json_schema=bool(caps.get("json_schema")),
-                                          context={"task": task, "doc_id": doc_id, "chapter_id": chapter_id},
-                                          reasoning_effort=self.reasoning_effort)
+                with self._slots:
+                    result = adapter.complete(api_model, messages, schema, max_tokens,
+                                              temperature=temperature, tools=tools,
+                                              tool_choice=tool_choice,
+                                              json_schema=bool(caps.get("json_schema")),
+                                              context={"task": task, "doc_id": doc_id, "chapter_id": chapter_id},
+                                              reasoning_effort=self.reasoning_effort)
             except RetryableError:
                 self.runtime.log_usage(
                     provider_id=provider_cfg["id"], model=model_name, task=task,
