@@ -12,6 +12,35 @@ function progressText(p: any): string {
   return String(p.stage ?? "");
 }
 
+// 任务进度百分比（进度条）：按阶段映射，未知阶段返回 null（走无限动画）
+function progressPercent(kind: string, p: any): number | null {
+  if (!p) return null;
+  if (kind === "generate") {
+    if (p.stage === "generate") return 4;
+    if (p.stage === "outline" && p.batches) return 6 + Math.round(((p.batch ?? 0) / p.batches) * 26);
+    if (p.stage === "outline_done") return 34;
+    if (p.stage === "fill_retry") return 36;
+    if (p.stage === "fill" && p.total) return 36 + Math.round(((p.done ?? 0) / p.total) * 60);
+    if (p.stage === "link") return 98;
+  }
+  if (kind === "import") {
+    if (p.stage === "ingest") return 20;
+    if (p.stage === "anchor") return 70;
+  }
+  if (kind === "export" && p.stage === "export") return 60;
+  return null;
+}
+
+// 界面配色（6 套）
+const THEMES: [string, string][] = [
+  ["light", "明亮"],
+  ["dark", "深色"],
+  ["sepia", "羊皮纸"],
+  ["mint", "护眼绿"],
+  ["sky", "天空蓝"],
+  ["lavender", "薰衣草"],
+];
+
 export default function Toolbar() {
   const docs = useStore((s) => s.docs);
   const docId = useStore((s) => s.docId);
@@ -125,9 +154,23 @@ export default function Toolbar() {
     removed: Record<string, number>;
     trashedTo: string;
   }>(null);
+  const [records, setRecords] = useState<any[] | null>(null);
 
-  const toggleTheme = () => {
-    const next = theme === "light" ? "dark" : "light";
+  // 生成记录（9.2 报告透传）：各章生成时间/模型/结果
+  const openRecords = async () => {
+    if (!docId) {
+      setToast("请先选择教材");
+      return;
+    }
+    try {
+      const r = await api.generateReports(docId);
+      setRecords(r.reports ?? []);
+    } catch (e: any) {
+      setToast("生成记录加载失败：" + e.message);
+    }
+  };
+
+  const applyTheme = (next: string) => {
     setTheme(next);
     localStorage.setItem("note-gen-theme", next);
     document.documentElement.setAttribute("data-theme", next);
@@ -140,9 +183,16 @@ export default function Toolbar() {
         <span className="logo">📒</span>
         <span>note-gen</span>
       </div>
-      <button className="icon" onClick={toggleTheme} title="切换明暗主题">
-        {theme === "light" ? "🌙" : "☀️"}
-      </button>
+      <select
+        className="theme-select"
+        value={theme}
+        onChange={(e) => applyTheme(e.target.value)}
+        title="界面配色"
+      >
+        {THEMES.map(([k, label]) => (
+          <option key={k} value={k}>{label}</option>
+        ))}
+      </select>
       <select
         value={docId ?? ""}
         onChange={(e) => {
@@ -213,6 +263,7 @@ export default function Toolbar() {
       <button onClick={() => void doExport("tex")}>导出 tex</button>
       <button onClick={() => void doExport("md-obsidian")}>导出 Obsidian</button>
       <button onClick={() => void openReview(true)}>待审核</button>
+      <button onClick={() => void openRecords()} title="查看各章生成的时间、模型与结果">生成记录</button>
       <button onClick={() => openSetup(true)} title="配置指南：环境自检与首次使用引导">配置指南</button>
       <button onClick={() => openSettings(true)}>设置</button>
 
@@ -253,6 +304,23 @@ export default function Toolbar() {
                 {t.progress?.stage ? " · " + progressText(t.progress) : ""}
                 {t.status === "failed" && t.error?.message ? " · " + t.error.message : ""}
               </span>
+              {["queued", "running"].includes(t.status) &&
+                (() => {
+                  const pct = progressPercent(t.kind, t.progress);
+                  return (
+                    <div
+                      className={"progress" + (pct === null ? " indeterminate" : "")}
+                      title={pct === null ? "处理中" : pct + "%"}
+                    >
+                      <i style={{ width: (pct ?? 40) + "%" }} />
+                    </div>
+                  );
+                })()}
+              {t.status === "succeeded" && (
+                <div className="progress" title="100%">
+                  <i style={{ width: "100%" }} />
+                </div>
+              )}
               {["queued", "running"].includes(t.status) && (
                 <button
                   onClick={() =>
@@ -283,6 +351,56 @@ export default function Toolbar() {
               </div>
             </div>
             <button onClick={() => setDeleted(null)}>知道了</button>
+          </div>
+        </div>
+      )}
+      {records && (
+        <div className="modal-mask" onClick={() => setRecords(null)}>
+          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+            <h2>生成记录</h2>
+            {records.length === 0 && (
+              <div className="empty">还没有生成记录——点击「生成本章」后可在此查看每次生成的时间、模型与结果</div>
+            )}
+            {records.map((r, i) => {
+              const chip =
+                r.status === "complete" ? "ok" : r.status === "partial" ? "warn" : "bad";
+              const label =
+                r.status === "complete" ? "完成" : r.status === "partial" ? "部分成功" : "失败";
+              return (
+                <div key={i} className="record-row">
+                  <div className="record-head">
+                    <b>{r.chapter_id}</b>
+                    <span className={"status-chip " + chip}>{label}</span>
+                    {r.cache_hit ? <span className="status-chip">缓存复用</span> : null}
+                    <span className="muted">
+                      {(String(r.created_at ?? "")).replace("T", " ").slice(0, 19)}
+                    </span>
+                  </div>
+                  <div className="record-meta">
+                    <span>提纲模型：{r.model?.outline ?? "-"}</span>
+                    <span>填充模型：{r.model?.fill ?? "-"}</span>
+                    <span>新增 {(r.created ?? []).length} · 更新 {(r.updated ?? []).length}</span>
+                    <span>
+                      跳过 {(r.skipped_identical ?? []).length + (r.skipped_protected ?? []).length}
+                    </span>
+                    <span>失败 {(r.failures ?? []).length}</span>
+                  </div>
+                  {(r.failures ?? []).length > 0 && (
+                    <div className="record-fail">
+                      {(r.failures ?? []).slice(0, 3).map((f: any, j: number) => (
+                        <div key={j}>
+                          · {f.stage ?? f.temp_id ?? ""}：{f.reason ?? ""}
+                        </div>
+                      ))}
+                      {(r.failures ?? []).length > 3 && (
+                        <div>…共 {(r.failures ?? []).length} 条失败</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            <button onClick={() => setRecords(null)}>关闭</button>
           </div>
         </div>
       )}

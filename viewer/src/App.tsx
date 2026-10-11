@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api/client";
 import Toolbar from "./components/Toolbar";
 import PdfPane from "./pdf/PdfPane";
@@ -9,12 +9,54 @@ import SetupGuide from "./components/SetupGuide";
 import ReviewQueue from "./components/ReviewQueue";
 import { useStore } from "./state/store";
 
+// 三栏初始列宽（px）：随窗口宽度给个合理默认
+function initialWidths(): [number, number] {
+  try {
+    const v = JSON.parse(localStorage.getItem("note-gen-col-widths") || "null");
+    if (Array.isArray(v) && v.length === 2 && isFinite(v[0]) && isFinite(v[1])) {
+      return [Math.max(180, Number(v[0])), Math.max(180, Number(v[1]))];
+    }
+  } catch {
+    /* 忽略损坏的本地设置 */
+  }
+  return [Math.round(window.innerWidth * 0.36), Math.round(window.innerWidth * 0.32)];
+}
+
 export default function App() {
   // 主题：跟随 localStorage，首次进入用浅色
   useEffect(() => {
     const saved = localStorage.getItem("note-gen-theme") || "light";
     document.documentElement.setAttribute("data-theme", saved);
   }, []);
+
+  // 三栏宽度可拖拽调节（列宽记忆到 localStorage）
+  const [widths, setWidths] = useState<[number, number]>(initialWidths);
+  const colsRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    localStorage.setItem("note-gen-col-widths", JSON.stringify(widths));
+  }, [widths]);
+  const startResize = (idx: 0 | 1) => (e: React.PointerEvent) => {
+    e.preventDefault();
+    const move = (ev: PointerEvent) => {
+      const rect = colsRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const x = ev.clientX - rect.left;
+      setWidths(([w0, w1]) => {
+        const min = 180;                                   // 每栏最小宽度
+        const rest = rect.width - w0 - w1 - 40;            // 第三栏留出的余量
+        if (idx === 0) return [Math.min(Math.max(x, min), rect.width - w1 - min - 40), w1];
+        return [w0, Math.min(Math.max(x - w0, min), rect.width - w0 - min - 40) || rest];
+      });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+    };
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
 
   const toast = useStore((s) => s.toast);
   const blocks = useStore((s) => s.blocks);
@@ -101,10 +143,18 @@ export default function App() {
   return (
     <div className="app">
       <Toolbar />
-      <main className="columns">
-        <PdfPane />
-        <NotesPane />
-        <BlockDetailPanel />
+      <main className="columns" ref={colsRef}>
+        <div className="col" style={{ flex: "0 0 " + widths[0] + "px" }}>
+          <PdfPane />
+        </div>
+        <div className="splitter" title="拖动调节栏宽" onPointerDown={startResize(0)} />
+        <div className="col" style={{ flex: "0 0 " + widths[1] + "px" }}>
+          <NotesPane />
+        </div>
+        <div className="splitter" title="拖动调节栏宽" onPointerDown={startResize(1)} />
+        <div className="col" style={{ flex: "1 1 0" }}>
+          <BlockDetailPanel />
+        </div>
       </main>
       <SettingsPanel />
       <SetupGuide />

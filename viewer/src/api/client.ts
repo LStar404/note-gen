@@ -82,6 +82,7 @@ export const api = {
     ),
   agentEdit: (url: string, body: any) => api.post<any>(url, body),
   generate: (docId: string, body: any) => api.post<{ task_id: string }>("/api/v1/docs/" + docId + "/generate", body),
+  generateReports: (docId: string) => api.get<{ reports: any[] }>("/api/v1/docs/" + docId + "/generate-reports"),
   exportDoc: (body: any) => api.post<{ task_id: string }>("/api/v1/export", body),
   getTask: (taskId: string) => api.get<any>("/api/v1/tasks/" + taskId),
   cancelTask: (taskId: string) => api.post<any>("/api/v1/tasks/" + taskId + "/cancel"),

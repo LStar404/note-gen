@@ -108,6 +108,19 @@ export default function BlockDetailPanel() {
             revision {detail.block.revision} · {detail.block.type} · order {detail.block.order}
           </div>
 
+          <h4>生成记录</h4>
+          <div className="muted">
+            {(detail.block.created_by === "ai"
+              ? "AI 生成"
+              : detail.block.created_by === "agent"
+                ? "agent 创建"
+                : "人工创建") +
+              " · " +
+              String(detail.block.created_at ?? "").replace("T", " ").slice(0, 19)}
+            {detail.history.some((h: any) => h.message === "再生成替换") && " · 经历过再生成"}
+            {detail.block.generation_protected && " · 已锁定，不再被自动覆盖"}
+          </div>
+
           <h4>来源</h4>
           {detail.block.sources.length === 0 && <div className="muted">无</div>}
           {detail.block.sources.map((s, i) => (

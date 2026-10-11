@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -116,6 +117,23 @@ def delete_doc(request: Request, doc_id: str, body: dict | None = None):
     result = store.trash_document()
     result["removed"] = summary
     return result
+
+
+@router.get("/api/v1/docs/{doc_id}/generate-reports")
+def generate_reports(request: Request, doc_id: str):
+    """生成记录（9.2 报告透传）：各章生成的时间/模型/结果，供 UI「生成记录」展示。"""
+    st = state(request)
+    DocStore(st.layout, doc_id).manifest()          # 不存在的文档 → 404
+    out = []
+    d = st.layout.reports_doc_dir(doc_id)
+    if d.exists():
+        for p in sorted(d.glob("*.generate.json")):
+            try:
+                out.append(json.loads(p.read_text(encoding="utf-8")))
+            except Exception:
+                continue                            # 单个报告损坏不影响列表
+    out.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
+    return {"reports": out}
 
 
 @router.get("/api/v1/docs/{doc_id}/pdf")
