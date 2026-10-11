@@ -19,6 +19,7 @@ def link_doc(doc_id: str, chapter_id: str | None = None, *, layout: Layout | Non
     layout = layout or Layout(Path.cwd())
     store = DocStore(layout, doc_id)
     manifest = store.manifest()
+    base_revision = store.data_revision()   # 乐观锁基线=读取时刻，防丢并发改动
     chapters = [chapter_id] if chapter_id else store.chapter_ids()
 
     anchors_by_ch = {ch: store.anchor_rows(ch) for ch in store.chapter_ids()}
@@ -88,9 +89,10 @@ def link_doc(doc_id: str, chapter_id: str | None = None, *, layout: Layout | Non
         if changed:
             block_updates[ch] = rows
 
+    committed_rev = base_revision
     if block_updates or anchor_updates:
         mutation = DocMutation(blocks=block_updates, anchors=anchor_updates, history=history_rows)
-        store.commit(mutation, sync_backlinks=True)
+        committed_rev = store.commit(mutation, base_revision=base_revision, sync_backlinks=True)
     else:
         # 无业务变更：不改 revision/历史/时间（5.6 幂等）
         report["skipped"] = True
@@ -107,7 +109,9 @@ def link_doc(doc_id: str, chapter_id: str | None = None, *, layout: Layout | Non
     stage_hashes["link"] = {"input_hash": "sha256:" + fingerprint, "output_hash": "sha256:" + fingerprint,
                             "version": "1"}
     if manifest.get("stage_hashes", {}).get("link", {}).get("output_hash") != stage_hashes["link"]["output_hash"]:
-        store.commit(DocMutation(manifest_updates={"stage_hashes": stage_hashes}), sync_backlinks=False)
+        # 续在上一提交的新 revision 上，两次提交都受乐观锁保护
+        store.commit(DocMutation(manifest_updates={"stage_hashes": stage_hashes}),
+                     base_revision=committed_rev, sync_backlinks=False)
     report["stage_hash"] = stage_hashes["link"]["output_hash"]
     _write_report(layout, doc_id, report)
     return report

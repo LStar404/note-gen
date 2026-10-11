@@ -54,6 +54,7 @@ def chunk_and_anchor(doc_id: str, chapter_id: str, *, layout: Layout | None = No
     layout = layout or Layout(Path.cwd())
     store = DocStore(layout, doc_id)
     manifest = store.manifest()
+    base_revision = store.data_revision()   # 乐观锁基线=读取时刻，防丢并发改动
     chapter = store.chapter(chapter_id)
     pages_dir = layout.ingest_pages(doc_id)
     if not pages_dir.exists():
@@ -101,7 +102,7 @@ def chunk_and_anchor(doc_id: str, chapter_id: str, *, layout: Layout | None = No
     mutation = DocMutation(anchors={chapter_id: rows}, refs=refs if refs else None,
                            blocks=block_updates, history=history_rows,
                            manifest_updates=manifest_updates)
-    store.commit(mutation, sync_backlinks=True)
+    store.commit(mutation, base_revision=base_revision, sync_backlinks=True)
     return len(rows)
 
 

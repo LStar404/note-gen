@@ -99,7 +99,6 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
         if is_cancelled and is_cancelled():
             raise TaskCancelled("任务已取消")
 
-    base_revision = store.data_revision()
     outline_hash = chapter.get("outline_hash") or ""
     registry = registry or ModelRegistry(layout)
     models_cfg = config.get("generate", {}).get("models", {}) or {}
@@ -215,6 +214,11 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
         c["sources"] = _normalize_sources(c.get("sources"))
 
     candidates = _derive_heading_and_order(candidates, anchors, chapter_id)
+    # CAS 基线取在 merge 读取时刻（I7/11.6.3）：outline+fill 可达十几分钟，
+    # 若基线取在生成开始，期间用户随手编辑一块就让整章提交 Conflict、
+    # 几十次 LLM 调用全部作废；merge 本就是按当前状态设计的（保护块跳过），
+    # 用 merge 时刻的 revision 既不丢用户并发改动、又不误伤在途生成。
+    base_revision = store.data_revision()
     # 失败候选必须交给合并器：保留对应旧块并进报告，不能据此删除（5.7 第 1 条）
     mutation, merge_report = merge_candidates(store, chapter_id, candidates,
                                               mode=merge_mode,

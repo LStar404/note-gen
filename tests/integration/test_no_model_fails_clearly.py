@@ -9,9 +9,11 @@ from fastapi.testclient import TestClient
 from src.api.main import create_app
 
 
-def _wait(c, tid):
+def _wait(c, tid, budget=180.0):
+    """等任务到终态；预算放宽到 180s——整套并跑时导入解析（auto→marker 兜底）会慢很多。"""
     t = {"status": "n/a"}
-    for _ in range(240):
+    deadline = time.time() + budget
+    while time.time() < deadline:
         t = c.get(f"/api/v1/tasks/{tid}").json()
         if t["status"] in ("succeeded", "failed", "partial", "cancelled", "interrupted"):
             return t

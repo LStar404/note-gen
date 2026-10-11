@@ -449,6 +449,9 @@ class DocStore:
         chapter = chapter_id or payload.get("chapter_id")
         if not chapter:
             raise SchemaViolation("新建块必须指定 chapter_id")
+        # 乐观锁基线必须取在读取时刻（I7/11.6.3）：commit 时才读 data_revision 的话，
+        # 读-改-写窗口内其他写者的提交会被整文件替换静默冲掉（丢更新）
+        base_revision = self.data_revision()
         existing = set(self.blocks_by_id(include_deleted=True))
         block = dict(payload)
         block["id"] = new_block_id(existing)
@@ -477,7 +480,7 @@ class DocStore:
         rows.append(block)
         mutation = DocMutation(blocks={chapter: rows},
                                history=[self.make_history_row(block, block["created_by"], message, now)])
-        self.commit(mutation, check_quotes=True)
+        self.commit(mutation, base_revision=base_revision, check_quotes=True)
         return block
 
     def update_block(self, block_id: str, patch: dict, *, expected_revision: int | None,
@@ -485,6 +488,9 @@ class DocStore:
                      unlocked_for_agent: bool = False, allow_fields: tuple[str, ...] | None = None) -> dict:
         """手动/agent 编辑（4.5.2）：只改可变字段，revision+1，写历史，保护位恒为 true。"""
         now = now or utc_now_iso()
+        # 乐观锁基线 = 读取时刻（I7/11.6.3）：commit 时才读 data_revision 会把
+        # 读-改-写窗口内的并发改动静默冲掉（整文件替换丢更新）
+        base_revision = self.data_revision()
         block = dict(self.get_block(block_id))
         if expected_revision is not None and int(block["revision"]) != int(expected_revision):
             raise RevisionConflict("revision 冲突", detail={"current_revision": block["revision"]})
@@ -512,13 +518,14 @@ class DocStore:
         rows = [block if b["id"] == block_id else b for b in rows]
         mutation = DocMutation(blocks={chapter: rows},
                                history=[self.make_history_row(block, author, message, now)])
-        self.commit(mutation, check_quotes=("sources" in patch))
+        self.commit(mutation, base_revision=base_revision, check_quotes=("sources" in patch))
         return block
 
     def soft_delete_block(self, block_id: str, *, expected_revision: int | None = None,
                           author: str = "human", message: str = "删除块", now: str | None = None) -> dict:
         """软删除（4.5.3）：只写 deleted_at，同步移除 note_block_ids，不物理删除行。"""
         now = now or utc_now_iso()
+        base_revision = self.data_revision()   # 乐观锁基线=读取时刻（同 update_block）
         block = dict(self.get_block(block_id))
         if expected_revision is not None and int(block["revision"]) != int(expected_revision):
             raise RevisionConflict("revision 冲突", detail={"current_revision": block["revision"]})
@@ -532,13 +539,14 @@ class DocStore:
         rows = [block if b["id"] == block_id else b for b in rows]
         mutation = DocMutation(blocks={chapter: rows},
                                history=[self.make_history_row(block, author, message, now)])
-        self.commit(mutation)
+        self.commit(mutation, base_revision=base_revision)
         return block
 
     def restore_block(self, block_id: str, *, expected_revision: int | None = None,
                       author: str = "human", message: str = "恢复块", now: str | None = None) -> dict:
         """恢复软删除：status 不变，按 sources 重建 backlink（4.5.3）。"""
         now = now or utc_now_iso()
+        base_revision = self.data_revision()   # 乐观锁基线=读取时刻
         block = dict(self.get_block(block_id))
         if expected_revision is not None and int(block["revision"]) != int(expected_revision):
             raise RevisionConflict("revision 冲突", detail={"current_revision": block["revision"]})
@@ -551,13 +559,14 @@ class DocStore:
         rows = [block if b["id"] == block_id else b for b in rows]
         mutation = DocMutation(blocks={chapter: rows},
                                history=[self.make_history_row(block, author, message, now)])
-        self.commit(mutation)
+        self.commit(mutation, base_revision=base_revision)
         return block
 
     def rollback_block(self, block_id: str, rev_id: str, *, expected_revision: int | None = None,
                        author: str = "human", now: str | None = None) -> dict:
         """回滚（4.4.6）：业务字段取快照值，revision 继续递增，保护位保持 true。"""
         now = now or utc_now_iso()
+        base_revision = self.data_revision()   # 乐观锁基线=读取时刻
         block = dict(self.get_block(block_id))
         if expected_revision is not None and int(block["revision"]) != int(expected_revision):
             raise RevisionConflict("revision 冲突", detail={"current_revision": block["revision"]})
@@ -580,13 +589,14 @@ class DocStore:
         rows = [block if b["id"] == block_id else b for b in rows]
         mutation = DocMutation(blocks={chapter: rows},
                                history=[self.make_history_row(block, author, f"回滚到 {rev_id}", now)])
-        self.commit(mutation, check_quotes=True)
+        self.commit(mutation, base_revision=base_revision, check_quotes=True)
         return block
 
     def allow_regeneration(self, block_id: str, *, expected_revision: int | None = None,
                            now: str | None = None) -> dict:
         """仅人工 UI 可调用：清除 generation_protected 并记历史（9.2）。"""
         now = now or utc_now_iso()
+        base_revision = self.data_revision()   # 乐观锁基线=读取时刻
         block = dict(self.get_block(block_id))
         if expected_revision is not None and int(block["revision"]) != int(expected_revision):
             raise RevisionConflict("revision 冲突", detail={"current_revision": block["revision"]})
@@ -598,13 +608,14 @@ class DocStore:
         rows = [block if b["id"] == block_id else b for b in rows]
         mutation = DocMutation(blocks={chapter: rows},
                                history=[self.make_history_row(block, "human", "允许重新生成覆盖", now)])
-        self.commit(mutation)
+        self.commit(mutation, base_revision=base_revision)
         return block
 
     def reorder_block(self, block_id: str, after: str | None, *, expected_revision: int | None = None,
                       author: str = "human", now: str | None = None) -> list[dict]:
         """把块 X 移到块 Y 之后（4.5.1）；after 为 null 表示移到开头。"""
         now = now or utc_now_iso()
+        base_revision = self.data_revision()   # 乐观锁基线=读取时刻
         block = dict(self.get_block(block_id))
         if expected_revision is not None and int(block["revision"]) != int(expected_revision):
             raise RevisionConflict("revision 冲突", detail={"current_revision": block["revision"]})
@@ -626,7 +637,7 @@ class DocStore:
         rows = [block if b["id"] == block_id else b for b in rows]
         mutation = DocMutation(blocks={chapter: rows},
                                history=[self.make_history_row(block, author, "重排", now)])
-        self.commit(mutation)
+        self.commit(mutation, base_revision=base_revision)
         return sort_blocks([b for b in rows if not b.get("deleted_at")])
 
     def trim_history(self, block_id: str, keep_recent: int = 50) -> int:
