@@ -21,7 +21,8 @@ class LLMProvider(Protocol):
     def complete(self, model: str, messages: list[dict], schema: dict | None,
                  max_tokens: int, temperature: float | None = None,
                  tools: list[dict] | None = None, tool_choice: str | dict | None = None,
-                 json_schema: bool = True, context: dict | None = None) -> dict: ...
+                 json_schema: bool = True, context: dict | None = None,
+                 reasoning_effort: str | None = None) -> dict: ...
 
 
 def _json_mode_messages(messages: list[dict]) -> list[dict]:
@@ -45,12 +46,17 @@ class OpenAICompatAdapter:
     def complete(self, model: str, messages: list[dict], schema: dict | None,
                  max_tokens: int, temperature: float | None = None,
                  tools: list[dict] | None = None, tool_choice: str | dict | None = None,
-                 json_schema: bool = True, context: dict | None = None) -> dict:
+                 json_schema: bool = True, context: dict | None = None,
+                 reasoning_effort: str | None = None) -> dict:
         import httpx
 
         body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
             body["temperature"] = temperature
+        if reasoning_effort:
+            # 推理深度（MiMo 等推理模型实测支持 low/medium/high）：
+            # 思考型模型单次调用的大头是思考 token，low 可显著缩短解析/填充耗时
+            body["reasoning_effort"] = reasoning_effort
         if schema is not None:
             if json_schema:
                 body["response_format"] = {
@@ -127,9 +133,11 @@ class DummyProvider:
     def complete(self, model: str, messages: list[dict], schema: dict | None,
                  max_tokens: int, temperature: float | None = None,
                  tools: list[dict] | None = None, tool_choice: str | dict | None = None,
-                 json_schema: bool = True, context: dict | None = None) -> dict:
+                 json_schema: bool = True, context: dict | None = None,
+                 reasoning_effort: str | None = None) -> dict:
         self.calls.append({"model": model, "messages": messages, "tools": tools,
-                           "tool_choice": tool_choice, "schema": schema})
+                           "tool_choice": tool_choice, "schema": schema,
+                           "reasoning_effort": reasoning_effort})
         item = self.responses.pop(0) if self.responses else {}
         if isinstance(item, Exception):
             raise item
@@ -203,6 +211,8 @@ class LLMClient:
         # 单次调用超时（5.3.2 可配置）：推理型模型（MiMo 等）单次可超 2 分钟，
         # 默认 120s 会被误判超时并白重试（实测 ch08 提纲阶段多次 success=0 空转）
         self.timeout = float((config.get("generate", {}) or {}).get("timeout", 600.0))
+        # 推理深度（generate.reasoning_effort）：low/medium/high，空=供应商默认
+        self.reasoning_effort = (config.get("generate", {}) or {}).get("reasoning_effort") or None
 
     # ---- 路由 ----
     def route(self, task: str) -> str:
@@ -255,7 +265,8 @@ class LLMClient:
                                           temperature=temperature, tools=tools,
                                           tool_choice=tool_choice,
                                           json_schema=bool(caps.get("json_schema")),
-                                          context={"task": task, "doc_id": doc_id, "chapter_id": chapter_id})
+                                          context={"task": task, "doc_id": doc_id, "chapter_id": chapter_id},
+                                          reasoning_effort=self.reasoning_effort)
             except RetryableError:
                 self.runtime.log_usage(
                     provider_id=provider_cfg["id"], model=model_name, task=task,

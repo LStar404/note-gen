@@ -22,7 +22,10 @@ generate:
   outline_max_out: 32000
   fill_max_out: 12000
   timeout: 600
-  concurrency: 4
+  concurrency: 6
+  # 推理深度：low/medium/high（推理型模型思考越深越慢；low 提速明显，
+  # 复杂章节若质量不足可改 medium）
+  reasoning_effort: low
   max_cost_per_chapter: 0.0
   temperature: 0.2
   output_language: zh

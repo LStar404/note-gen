@@ -77,6 +77,29 @@ export default function Toolbar() {
     };
   }, []);
 
+  // 任务收尾（9.2 反馈）：生成完的块要立刻可见，不用用户手动刷新页面
+  const refreshAfterTask = (kind: string, t: any) => {
+    const st = useStore.getState();
+    if (kind === "generate") {
+      void st.loadBlocks();
+      if (t.status === "succeeded") setToast("生成完成，笔记已刷新");
+      else if (t.status === "partial") setToast("生成完成（部分块失败，详见「生成记录」），已刷新");
+    } else if (kind === "import" || kind === "rebuild") {
+      void st.loadDocs().then(() => {
+        const docId = t.result?.doc_id;
+        if (docId) void st.selectDoc(docId);
+      });
+      if (t.status === "succeeded") {
+        setToast(kind === "rebuild" ? "重建完成，已打开文档" : "导入完成，已打开文档");
+      }
+    } else if (kind === "export" && t.status === "succeeded") {
+      setToast("导出完成：" + ((t.result?.paths ?? []).length || 0) + " 个文件");
+    }
+    if (t.status === "failed") {
+      setToast((kind === "generate" ? "生成失败：" : "任务失败：") + (t.error?.message ?? t.status));
+    }
+  };
+
   // 任务进度/取消（9.2 /tasks/{id}）
   const track = (taskId: string, kind: string) => {
     setTasks((list) => [...list, { task_id: taskId, kind, status: "queued", progress: {} }]);
@@ -87,6 +110,7 @@ export default function Toolbar() {
         if (["succeeded", "failed", "partial", "cancelled", "interrupted"].includes(t.status)) {
           window.clearInterval(timer);
           timersRef.current.delete(timer);
+          refreshAfterTask(kind, t);
         }
       } catch {
         window.clearInterval(timer);

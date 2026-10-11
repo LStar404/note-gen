@@ -29,6 +29,7 @@ DEFAULTS: dict[str, Any] = {
         "fill_max_out": 12000,
         "concurrency": 2,
         "timeout": 600,          # LLM 单次调用超时秒数（推理型模型需更长）
+        "reasoning_effort": None,  # 推理深度 low/medium/high（空=供应商默认；low 显著提速）
         "max_cost_per_chapter": 0.0,
         "temperature": 0.2,
         "output_language": "zh",      # zh | en | ja  生成笔记与导出标签语言
@@ -43,6 +44,7 @@ DEFAULTS: dict[str, Any] = {
 
 ENCODINGS = ("utf-8", "utf-8-sig", "gbk", "big5")
 OUTPUT_LANGUAGES = ("zh", "en", "ja")
+REASONING_EFFORTS = ("low", "medium", "high")
 
 
 def normalize_settings(cfg: dict) -> dict:
@@ -51,6 +53,9 @@ def normalize_settings(cfg: dict) -> dict:
     cfg.setdefault("export", {})["encoding"] = enc if enc in ENCODINGS else "utf-8"
     lang = ((cfg.get("generate") or {}).get("output_language") or "zh").lower()
     cfg.setdefault("generate", {})["output_language"] = lang if lang in OUTPUT_LANGUAGES else "zh"
+    # 推理深度：仅接受 low/medium/high，空值=供应商默认（不限制思考长度）
+    effort = ((cfg.get("generate") or {}).get("reasoning_effort") or "").lower() or None
+    cfg["generate"]["reasoning_effort"] = effort if effort in REASONING_EFFORTS else None
     return cfg
 
 
