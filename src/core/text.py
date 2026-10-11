@@ -176,6 +176,102 @@ def sanitize_control_chars(text: str) -> str:
     return "".join(out)
 
 
+# ---- 公式文本规范化（入库闸门 + 存量修复） ----
+# 常见数学命令：用于判断「换行处是不是把反斜杠写丢了」
+# （模型会写出 "$<换行>lim_{...}"、"(X,<换行>mathcal{A})" 这种）
+MATH_COMMANDS = frozenset("""
+mathbb mathcal mathfrak mathbf mathrm mathit mathsf mathtt mathds boldsymbol operatorname
+alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa lambda mu nu
+xi pi varpi rho varrho sigma varsigma tau upsilon phi varphi chi psi omega
+Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega
+lim limsup liminf log ln exp sin cos tan cot sec csc arcsin arccos arctan sinh cosh tanh
+det dim ker deg gcd hom sup inf max min arg frac dfrac tfrac sqrt sum prod int iint iiint
+oint bigcup bigcap bigvee bigwedge bigoplus bigotimes bigodot bigsqcup
+partial nabla infty cdots ldots vdots ddots dots quad qquad
+left right bigl bigr Bigl Bigr biggl biggr Biggl Biggr
+text textbf textit textrm textsf texttt mathop mathrel mathord mathbin mathopen mathclose
+subset subseteq supset supseteq in notin ni cup cap setminus times cdot ast circ oplus
+otimes leq geq neq approx equiv sim simeq propto to mapsto rightarrow leftarrow
+leftrightarrow Rightarrow Leftarrow Leftrightarrow forall exists neg land lor implies iff
+wedge vee perp parallel angle triangle square lfloor rfloor lceil rceil langle rangle
+vert Vert lvert rvert lVert rVert
+begin end cases matrix pmatrix bmatrix vmatrix array aligned align
+hspace vspace displaystyle textstyle scriptstyle
+""".split())
+
+GREEK_COMMANDS = {
+    "σ": "sigma", "Σ": "Sigma", "μ": "mu", "λ": "lambda", "α": "alpha", "β": "beta",
+    "γ": "gamma", "δ": "delta", "ε": "varepsilon", "ζ": "zeta", "η": "eta", "θ": "theta",
+    "κ": "kappa", "ν": "nu", "ξ": "xi", "π": "pi", "ρ": "rho", "τ": "tau", "φ": "varphi",
+    "χ": "chi", "ψ": "psi", "ω": "omega", "Ω": "Omega", "Δ": "Delta", "Φ": "Phi",
+    "Γ": "Gamma", "Θ": "Theta", "Λ": "Lambda", "Π": "Pi", "Ψ": "Psi",
+}
+
+_MATH_SPAN_RE = re.compile(r"\$\$[\s\S]*?\$\$|\$[^$]*?\$")
+_TEXT_GROUP_RE = re.compile(r"\\text\{[^}]*\}")
+# 异体字/私用区/替换字符/希伯来-阿拉伯呈现形式：数学里出现必然是模型垃圾输出
+_JUNK_CHARS_RE = re.compile(r"[\uE000-\uF8FF\uFB1D-\uFB4F\uFBF0-\uFDFF\uFFFD]")
+_FENCE_RE = re.compile(chr(96) * 3 + r"[\s\S]*?" + chr(96) * 3)
+_NL_BEFORE_WORD_RE = re.compile(r"\n(?=([A-Za-z]{2,}))")
+_DISPLAY_DELIMS = set("_^{([)]},")
+
+
+def _normalize_math_span(seg: str) -> str:
+    display = seg.startswith("$$")
+
+    def _nl(m: "re.Match[str]") -> str:
+        rest = seg[m.end():]
+        word = _NL_BEFORE_WORD_RE.match("\n" + rest)
+        cmd = word.group(1) if word else ""
+        if cmd and cmd in MATH_COMMANDS:
+            nxt = rest[len(cmd):len(cmd) + 1]
+            if not display or nxt == "" or nxt in _DISPLAY_DELIMS:
+                return "\\"            # 该换行其实是丢掉的 LaTeX 反斜杠
+        return m.group(0)
+
+    out = _NL_BEFORE_WORD_RE.sub(_nl, seg)
+    if not display:
+        out = out.replace("\n", " ")     # 行内公式不得跨行：否则 $ 配对错位
+    # 裸希腊字母 → LaTeX 命令（\text{} 内是文本模式，保持不动）
+    protected: list[str] = []
+
+    def _mask(m: "re.Match[str]") -> str:
+        protected.append(m.group(0))
+        return chr(0) + str(len(protected) - 1) + chr(0)
+
+    work = _TEXT_GROUP_RE.sub(_mask, out)
+    for greek, name in GREEK_COMMANDS.items():
+        if greek in work:
+            work = work.replace(greek, "\\" + name)
+    for i, original in enumerate(protected):
+        work = work.replace(chr(0) + str(i) + chr(0), original)
+    return _JUNK_CHARS_RE.sub("", work)
+
+
+def normalize_math_text(content: str) -> str:
+    """公式文本规范化（入库闸门 + 存量修复）。
+
+    1) 行内公式跨行会让前端不跨行匹配 → $ 配对错位、散文被当公式渲染；
+       若换行处紧跟已知命令名，说明模型把反斜杠写丢成了换行（"$<NL>lim_{...}"），
+       还原为反斜杠；其余行内换行并成空格
+    2) 数学里的裸 Unicode 希腊字母（σ/λ/μ…）改用 LaTeX 命令
+    3) 清除数学里的异体字/私用区垃圾字符
+    """
+    if not content or "$" not in content:
+        return content
+    fences: list[str] = []               # 代码块里的 $ 不是公式
+
+    def _keep_fence(m: "re.Match[str]") -> str:
+        fences.append(m.group(0))
+        return chr(1) + str(len(fences) - 1) + chr(1)
+
+    text = _FENCE_RE.sub(_keep_fence, content)
+    text = _MATH_SPAN_RE.sub(lambda m: _normalize_math_span(m.group(0)), text)
+    for i, fence in enumerate(fences):
+        text = text.replace(chr(1) + str(i) + chr(1), fence)
+    return text
+
+
 def slugify(value: str, fallback: str = "doc") -> str:
     """doc_id 候选：仅 [a-z0-9-]，中文/空名用 fallback（4.2.1）。"""
     v = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode("ascii")
