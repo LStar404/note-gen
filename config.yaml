@@ -4,7 +4,9 @@ app:
   cors_origins:
   - http://127.0.0.1:5173
 parser:
-  default: marker
+  # auto = 按需分流：数字版 PDF（有文字层）走 pypdf 秒级路径，
+  # 扫描书才用 marker/docling；显式指定 marker 会强制重型解析（百页数十分钟起）
+  default: auto
   ocr_mode: auto
   python: null
 chapters_override: []

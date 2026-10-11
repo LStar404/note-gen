@@ -77,18 +77,22 @@ async def create_doc(request: Request, file: UploadFile = File(...), title: str 
     target.write_bytes(data)
 
     def run(req, progress, is_cancelled, register_artifact, task_id=None):
-        progress({"stage": "ingest"})
+        progress({"stage": "ingest", "pages_done": 0, "pages_total": None})
         manifest = parse_pdf_with_fallback(target, st.layout.ingest_root,
                                            st.config.get("parser", {}).get("default", "auto"),
                                            layout=st.layout, doc_id=doc, profile=profile,
                                            title=title or Path(file.filename).stem,
-                                           config=st.config)
-        progress({"stage": "anchor"})
+                                           config=st.config, progress=progress)
         from src.anchor.chunker import chunk_and_anchor
 
         counts = {}
-        for ch in manifest["chapters"]:
+        chapters = manifest["chapters"]
+        for idx, ch in enumerate(chapters):
+            # 按章报锚定进度（9.2）：导入是两段式，进度条要能持续推进
+            progress({"stage": "anchor", "done": idx, "total": len(chapters),
+                      "chapter_id": ch["chapter_id"]})
             counts[ch["chapter_id"]] = chunk_and_anchor(doc, ch["chapter_id"], layout=st.layout)
+        progress({"stage": "anchor", "done": len(chapters), "total": len(chapters)})
         return {"doc_id": doc, "chapters": manifest["chapters"], "anchors": counts}
 
     task = st.tasks.submit("import", run, {"doc_id": doc, "filename": file.filename},

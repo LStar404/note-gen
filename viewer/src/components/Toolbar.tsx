@@ -9,6 +9,8 @@ function progressText(p: any): string {
   if (p.stage === "outline_done") return "提纲完成 " + (p.count ?? 0) + " 项";
   if (p.stage === "fill" && p.total) return "填充 " + (p.done ?? 0) + "/" + p.total;
   if (p.stage === "generate") return p.chapter_id ? "生成 " + p.chapter_id : "生成中";
+  if (p.stage === "ingest" && p.pages_total) return "解析 " + (p.pages_done ?? 0) + "/" + p.pages_total + " 页";
+  if (p.stage === "anchor" && p.total) return "锚定 " + (p.done ?? 0) + "/" + p.total + " 章";
   return String(p.stage ?? "");
 }
 
@@ -24,7 +26,13 @@ function progressPercent(kind: string, p: any): number | null {
     if (p.stage === "link") return 98;
   }
   if (kind === "import") {
-    if (p.stage === "ingest") return 20;
+    if (p.stage === "ingest" && p.pages_total) {
+      return 5 + Math.round(((p.pages_done ?? 0) / p.pages_total) * 55);
+    }
+    if (p.stage === "ingest") return 15;
+    if (p.stage === "anchor" && p.total) {
+      return 65 + Math.round(((p.done ?? 0) / p.total) * 30);
+    }
     if (p.stage === "anchor") return 70;
   }
   if (kind === "export" && p.stage === "export") return 60;

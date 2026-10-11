@@ -28,13 +28,73 @@ const CHECKS_BY_STEP: Record<string, string[]> = {
   budget: ["price"],
 };
 
-const STEP_HELP: Record<string, string> = {
-  env: "确认运行环境就绪：Python 版本、数据目录可写、本地安全令牌。",
-  model: "添加 OpenAI 兼容供应商（base_url + API Key）并登记模型。密钥推荐用环境变量 api_key_env，避免明文落盘；接口只回显末 4 位。",
-  routes: "为提纲 / 填充 / agent / 链接指定模型；留空回退 default。agent 任务必须选具备 tools 能力的模型。",
-  parser: "选择 PDF 解析器与扫描页 OCR 策略。重型解析器（marker/docling）装在独立 .venv-parsers（ADR D31），未安装时自动回退 pypdf。",
-  output: "设置笔记输出语言与导出编码（后续可随时改）。",
-  budget: "设置并发与单章成本上限。启用非零预算时，已路由模型必须配置价格，否则生成会被 PRICE_UNKNOWN 拒绝（5.3.5）。",
+/** 分步骤引导（每步：做什么 → 怎么做 → 完成标志 → 提示） */
+const STEP_GUIDE: Record<
+  string,
+  { goal: string; steps: string[]; expect: string; tip?: string }
+> = {
+  env: {
+    goal: "确认运行环境就绪——这步不用填任何东西，看自检结果即可。",
+    steps: [
+      "查看下方「自检」卡片：Python 版本、数据目录、本地令牌三项是否都是绿色",
+      "若数据目录不可写：检查 data/ 目录的读写权限后点「重新自检」",
+      "若本地令牌缺失：重启一次应用会自动生成（仅本机访问校验用）",
+    ],
+    expect: "三项自检全部为绿色，顶部状态徽标变为「已就绪」或进入下一步继续配置。",
+    tip: "红/黄项不用慌——每张卡片下方都写了对应的修复动作，照做即可。",
+  },
+  model: {
+    goal: "接入至少一个大模型供应商——没有这步，生成笔记无从谈起。",
+    steps: [
+      "点「添加供应商」：填供应商 id（如 deepseek / mimo，小写字母数字）",
+      "填 base_url（OpenAI 兼容地址，如 https://api.deepseek.com/v1）",
+      "填 API Key；更推荐填「环境变量名」（如 DEEPSEEK_API_KEY）避免明文落盘",
+      "在「模型 id」里每行填一个模型名（如 deepseek-v3 / mimo-v2.6-flash）",
+      "点「保存」，再点「测试连接」验证连通性",
+    ],
+    expect: "自检中「模型」与「API Key」两项变绿；测试连接返回成功。",
+    tip: "测试返回 401 = 密钥无效，402 = 余额不足，404 = 模型 id 写错。接口只回显密钥末 4 位，不会泄露全文。",
+  },
+  routes: {
+    goal: "把不同任务分配给不同模型——决定每类任务用谁来干活。",
+    steps: [
+      "default：必填，所有任务的兜底模型",
+      "outline / fill：可分别指定；留空则用 default（填充调用量大，可指给便宜的模型）",
+      "agent：必须选「具备 tools 能力」的模型（右侧会显示能力检测结果）",
+      "点「保存路由」",
+    ],
+    expect: "「任务路由」检查项变绿，agent 模型能力显示「有」。",
+    tip: "换路由后生成缓存按新模型自动失效，不需要手动清理。",
+  },
+  parser: {
+    goal: "选择 PDF 解析方式——直接影响导入速度与识别质量。",
+    steps: [
+      "电子版 PDF（能选中文字的教材/论文）：选 auto——自动走 pypdf 快速路径，百页秒级",
+      "扫描版 PDF（图片书）：才需要 marker / docling（重型解析，百页数十分钟起）",
+      "OCR 策略保持 auto 即可：只对没有文字层的页做 OCR",
+    ],
+    expect: "所选解析器的可用性检查为绿色（auto 只要任意一个可用即绿）。",
+    tip: "导入卡在「解析」多半是扫描书或选了重型解析器——先用 auto 试，慢再换。",
+  },
+  output: {
+    goal: "设置笔记的语言与导出编码（随时可改）。",
+    steps: [
+      "输出语言：笔记正文的语言（zh / en）",
+      "导出编码：utf-8 通用；需要在旧版 Windows 记事本打开就选 gbk",
+    ],
+    expect: "「输出」检查项变绿。",
+    tip: "语言只影响生成的笔记，不影响 PDF 解析；教材本身是中文不影响选 en。",
+  },
+  budget: {
+    goal: "控制并发与花费——防失控的保险丝。",
+    steps: [
+      "并发：同章内并行的填充调用数，默认 4（API 限流明显时调小）",
+      "单章成本上限：填 0 = 不限制；填金额（USD）后超预算会停止新调用",
+      "启用非零预算时，所有已路由模型必须配置价格（input/output per million）",
+    ],
+    expect: "「成本与价格」检查项为绿色，顶部显示「已就绪」。",
+    tip: "超预算不会丢成果：已完成的块照常保留，只是停止后续调用（5.3.5）。",
+  },
 };
 
 export default function SetupGuide() {
@@ -203,7 +263,28 @@ export default function SetupGuide() {
             {step && (
               <>
                 <h3>{step.title}</h3>
-                <p className="muted">{STEP_HELP[step.id] ?? step.summary}</p>
+                {STEP_GUIDE[step.id] ? (
+                  <div className="guide-box">
+                    <p className="guide-goal">{STEP_GUIDE[step.id].goal}</p>
+                    <ol className="guide-steps">
+                      {STEP_GUIDE[step.id].steps.map((s, i) => (
+                        <li key={i}>{s}</li>
+                      ))}
+                    </ol>
+                    <p className="guide-expect">
+                      <b>完成标志：</b>
+                      {STEP_GUIDE[step.id].expect}
+                    </p>
+                    {STEP_GUIDE[step.id].tip && (
+                      <p className="guide-tip">
+                        <b>提示：</b>
+                        {STEP_GUIDE[step.id].tip}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="muted">{step.summary}</p>
+                )}
 
                 {checksFor(CHECKS_BY_STEP[step.id] ?? []).map(renderCheck)}
 

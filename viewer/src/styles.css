@@ -533,6 +533,18 @@ button:active, .file-button:active { box-shadow: none; }
 .record-row:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
 .record-head b { letter-spacing: .2px; }
 
+/* 配置指南分步骤引导 */
+.guide-box {
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm); padding: 12px 15px; margin-bottom: 12px;
+}
+.guide-goal { margin: 0 0 8px; font-weight: 600; }
+.guide-steps { margin: 0 0 8px; padding-left: 20px; color: var(--text-2); }
+.guide-steps li { margin-bottom: 4px; }
+.guide-expect { margin: 0 0 4px; font-size: 12.5px; color: var(--ok); }
+.guide-tip { margin: 0; font-size: 12.5px; color: var(--text-2); }
+
 /* 小标题统一弱化 */
 .detail-body h4, .modal h3 {
   color: var(--text-2); letter-spacing: .4px; margin: 12px 0 6px; font-size: 12px;

@@ -12,6 +12,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from typing import Callable
 
 from src.core.coord import transform_rect, validate_bbox
 from src.core.errors import InputError, PipelineError
@@ -324,11 +325,29 @@ def get_adapter(name: str, *, python: str | None = None) -> ParserAdapter:
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
+def _has_text_layer(reader, sample: int = 3, min_chars: int = 80) -> bool:
+    """数字版 PDF 快速探测：抽样首/中/末几页，平均字符数达标即认为有可用文字层。
+
+    auto 分流的关键（NFR-4 能力驱动）：有文字层的教材用 pypdf 秒级完成，
+    只有扫描书才值得上 marker/docling（百页数十分钟到小时级）。
+    """
+    n = len(reader.pages)
+    idxs = list(dict.fromkeys([0, n // 2, n - 1]))[:sample]
+    total = 0
+    for i in idxs:
+        try:
+            total += len((reader.pages[i].extract_text() or "").strip())
+        except Exception:
+            continue
+    return total / max(1, len(idxs)) >= min_chars
+
+
 def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *,
               layout: Layout | None = None, doc_id: str | None = None,
               profile: str = "textbook", title: str | None = None,
               chapters_override: list | None = None, ocr: bool = False,
-              config: dict | None = None) -> dict:
+              config: dict | None = None,
+              progress: Callable[[dict], None] | None = None) -> dict:
     """解析 PDF → pages/*.json + manifest（5.1 MUST 顺序执行）。返回 manifest dict。"""
     pdf_path = Path(pdf_path).resolve()
     if not pdf_path.exists():
@@ -343,7 +362,15 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
         raise InputError("PDF 没有任何页面")
 
     parser_python = (config or {}).get("parser", {}).get("python")
-    adapter = get_adapter(parser, python=parser_python)
+    chosen = parser
+    if parser == "auto" and _has_text_layer(reader):
+        # 快速路径：数字版 PDF 无需重型解析器（实测 285 页教材 marker 数小时 vs pypdf 秒级）
+        chosen = "pypdf"
+        print("[ingest] auto → pypdf：检测到文字层，走快速路径", file=sys.stderr)
+    adapter = get_adapter(chosen, python=parser_python)
+    if progress:
+        progress({"stage": "ingest", "pages_done": 0, "pages_total": n_pages,
+                  "parser": adapter.name})
 
     # 5.2：doc_ns 碰撞必须拒绝导入，否则全局点查（anchor_id 前缀）产生歧义
     ns = doc_namespace(doc_id)
@@ -375,6 +402,9 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
     ocr_pages_used = 0
 
     for i in range(n_pages):
+        if progress and (i % 5 == 0 or i == n_pages - 1):
+            progress({"stage": "ingest", "pages_done": i, "pages_total": n_pages,
+                      "parser": adapter.name})
         meta = _pdf_page_meta(reader.pages[i])
         if bulk is not None:
             page_data = (bulk.get("pages") or [])[i] if i < len(bulk.get("pages") or []) else {}
