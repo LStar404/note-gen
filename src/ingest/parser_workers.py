@@ -541,6 +541,64 @@ def pymupdf_extract(req: dict) -> dict:
                 "derivation": "pymupdf 文本行 bbox 经 y 轴翻转换算到 PDF 用户空间（rotation=0）"}}
 
 
+# --------------------------------------------------------------------------- 图像
+def extract_images(req: dict) -> dict:
+    """内嵌位图提取（图资源刷新）：TeX 书的插图多为内嵌 PNG/JPEG——
+    返回每张图的放置矩形（PDF 用户空间，y 轴已翻转）并把像素图存到 figures_dir。
+    旋转页不猜（5.1.5）直接跳过。"""
+    try:
+        import fitz
+    except Exception as exc:
+        return {"ok": False, "parser": "pymupdf", "error": f"pymupdf 不可用: {exc}"}
+
+    pdf_path = req["pdf_path"]
+    pages_meta = req.get("pages_meta") or _pages_meta_from_pdf(pdf_path)
+    out_dir = req.get("figures_dir")
+    figures: list[dict] = []
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception as exc:
+        return {"ok": False, "parser": "pymupdf", "error": f"打开 PDF 失败: {exc}"}
+
+    try:
+        for idx in range(len(pages_meta)):
+            meta = pages_meta[idx]
+            vb = meta.get("view_box") or [0, 0, 0, 0]
+            if int(meta.get("rotation", 0) or 0) % 360 != 0:
+                continue
+            page = doc[idx]
+            top, bottom = float(vb[3]), float(vb[1])
+            seen: set[int] = set()
+            for img in page.get_images(full=True):
+                xref = img[0]
+                if xref in seen:
+                    continue
+                seen.add(xref)
+                for ri, rect in enumerate(page.get_image_rects(xref) or []):
+                    if rect.is_empty or rect.width < 40 or rect.height < 40:
+                        continue
+                    # 放置矩形常超出页面（多联图/出血排版）：夹紧到页面即可见区域，
+                    # 不做「超大=背景图」猜测——实测会把真插图滤掉
+                    bbox = [max(rect.x0, float(vb[0])),
+                            max(bottom, bottom + top - rect.y1),
+                            min(rect.x1, float(vb[2])),
+                            min(top, bottom + top - rect.y0)]
+                    if bbox[2] - bbox[0] < 40 or bbox[3] - bbox[1] < 40:
+                        continue
+                    fname = None
+                    if out_dir:
+                        Path(out_dir).mkdir(parents=True, exist_ok=True)
+                        fname = f"img_{idx + 1:04d}_{xref}_{ri}.png"
+                        pix = fitz.Pixmap(doc, xref)
+                        if pix.n - pix.alpha > 3:          # CMYK → RGB
+                            pix = fitz.Pixmap(fitz.csRGB, pix)
+                        pix.save(str(Path(out_dir) / fname))
+                    figures.append({"page": idx + 1, "bbox": bbox, "file": fname})
+        return {"ok": True, "parser": "pymupdf", "figures": figures}
+    finally:
+        doc.close()
+
+
 def main() -> int:
     req = _read_request()
     mode = req.get("mode", "probe")
@@ -549,6 +607,7 @@ def main() -> int:
         "marker": marker_extract,
         "docling": docling_extract,
         "pymupdf": pymupdf_extract,
+        "extract_images": extract_images,
         "ocr_pages": ocr_pages,
         "pix2text": pix2text_recognize,
     }

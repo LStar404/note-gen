@@ -46,7 +46,9 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
     if related_titles:
         fulltexts += "\n\n相关已生成块标题：" + "；".join(related_titles[:8])
 
-    fig_id = next((s["anchor_id"] for s in spec.get("sources", []) if s.get("figure_id")), "fig_00000000")
+    # 图占位符 id 必须用真实 figure_id（原实现误取 anchor_id，模型照抄后全是破图）
+    fig_id = next((s.get("figure_id") for s in spec.get("sources", []) if s.get("figure_id")),
+                  "fig_00000000")
     prompt = FILL_PROMPT.format(
         block_type=spec.get("type", "definition"),
         title=spec.get("title", ""),

@@ -13,7 +13,7 @@ from src.core.errors import (ConflictError, InputError, NoteGenError,
                              NotFound, PipelineError, PriceUnknown,
                              TaskCancelled)
 from src.core.paths import DOC_ID_RE, FIGURE_ID_RE
-from src.core.store import DocStore
+from src.core.store import DocMutation, DocStore
 from src.db import queries
 from src.ingest.parse_pdf import parse_pdf_with_fallback
 
@@ -147,6 +147,96 @@ def rebuild_doc(request: Request, doc_id: str, body: dict | None = None):
     task = st.tasks.submit("import", run, {"doc_id": doc_id, "mode": "rebuild"},
                            doc_id=doc_id)
     return JSONResponse({"task_id": task["task_id"], "doc_id": doc_id}, status_code=202)
+
+
+@router.post("/api/v1/docs/{doc_id}/refresh-figures")
+def refresh_figures_api(request: Request, doc_id: str, body: dict | None = None):
+    """刷新图资源（不重新导入）：从 PDF 内嵌图登记 figures/ 与图锚点，
+    并把既有笔记里悬空的 ![{fig}] 占位引用改指到真实图（图在源锚点同页且唯一时）。"""
+    import re
+
+    from src.anchor.chunker import chunk_and_anchor
+    from src.core.text import utc_now_iso
+    from src.ingest.figures import refresh_figures
+
+    st = state(request)
+    store = DocStore(st.layout, doc_id)
+    manifest = store.manifest()
+    pdf = st.layout.root / manifest["pdf_path"]
+    figs = refresh_figures(pdf, st.layout, doc_id,
+                           parser_python=(st.config.get("parser", {}) or {}).get("python"))
+
+    # 重锚定（5.5 来源迁移）：pages JSON 补了 figure 块 → 生成图锚点，
+    # 既有块的 sources 由迁移对配自动维护（锚点 id 是内容哈希，稳定）
+    for ch in store.chapter_ids():
+        chunk_and_anchor(doc_id, ch, layout=st.layout)
+
+    # 既有笔记的悬空图片引用修复：源锚点同页恰有一张图 → 改指真实 id
+    fig_dir = st.layout.figures_dir(doc_id)
+    pages_dir = st.layout.ingest_root / doc_id / "pages"
+    fig_by_page: dict[int, set[str]] = {}
+    for pf in pages_dir.glob("*.json"):
+        try:
+            d = json.loads(pf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for b in d.get("blocks", []):
+            if b.get("figure_id"):
+                fig_by_page.setdefault(int(d.get("page", 0)), []).append(
+                    (b["figure_id"], b.get("bbox") or [0, 0, 0, 0]))
+    ref_re = re.compile(r"!\[(fig_\d{8})\]")
+    now = utc_now_iso()
+    patched = 0
+
+    def _vgap(a: list, f: list) -> float:
+        """锚点与图的纵向间距（重叠为 0）：源文本通常紧贴所引插图。"""
+        return max(0.0, float(f[1]) - float(a[3]), float(a[1]) - float(f[3]))
+    for ch in store.chapter_ids():
+        rows = [dict(b) for b in store.block_rows(ch, include_deleted=True)]
+        anchors_by_id = {a["anchor_id"]: a for a in store.anchor_rows(ch)}
+        history = []
+        changed = False
+        for b in rows:
+            if b.get("deleted_at"):
+                continue
+            content = b.get("content") or ""
+            refs = ref_re.findall(content)
+            unresolved = [r for r in set(refs) if not (fig_dir / f"{r}.png").exists()]
+            if not unresolved:
+                continue
+            src_anchors = [anchors_by_id.get(a.get("anchor_id"), {})
+                           for a in (b.get("sources") or [])]
+            primary_page = next((a.get("page") for a in src_anchors if a.get("page")), None)
+            scored: list[tuple[float, int, str]] = []
+            for pg in {a.get("page") for a in src_anchors}:
+                if not pg:
+                    continue
+                same_page = [a for a in src_anchors if a.get("page") == pg and a.get("bbox")]
+                for fid, fbbox in fig_by_page.get(int(pg), []):
+                    gaps = [_vgap(a["bbox"], fbbox) for a in same_page]
+                    if gaps:
+                        # 只在同页锚点间比距离（跨页坐标不可比）；首选来源页破平
+                        scored.append((min(gaps), 0 if pg == primary_page else 1, fid))
+            scored.sort()
+            # 与次近差距 <60pt（且同破平级）视为歧义，不猜（前端优雅降级）
+            if not scored:
+                continue
+            if len(scored) > 1 and scored[1][:2] == scored[0][:2] and scored[1][0] - scored[0][0] < 60:
+                continue
+            real = scored[0][2]
+            for r in unresolved:
+                content = content.replace(f"![{r}]", f"![{real}]")
+            if content != b["content"]:
+                b["content"] = content
+                b["revision"] = int(b["revision"]) + 1
+                b["updated_at"] = now
+                history.append(store.make_history_row(b, "ai", "图片引用修复", now))
+                changed = True
+                patched += 1
+        if changed:
+            store.commit(DocMutation(blocks={ch: rows}, history=history),
+                         base_revision=store.data_revision(), sync_backlinks=True)
+    return {"figures": len(figs), "patched_blocks": patched}
 
 
 @router.get("/api/v1/docs/{doc_id}")

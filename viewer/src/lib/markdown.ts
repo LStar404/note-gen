@@ -127,7 +127,7 @@ function figurePlugin(md: MarkdownIt): void {
       figId +
       '" alt="' +
       escapeHtml(caption) +
-      '">'
+      '" onerror="this.style.display=' + "'none'" + '">'
     );
   };
 }

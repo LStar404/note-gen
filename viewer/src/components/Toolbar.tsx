@@ -322,6 +322,23 @@ export default function Toolbar() {
       <button onClick={() => void doExport("md-obsidian")}>导出 Obsidian</button>
       <button onClick={() => void openReview(true)}>待审核</button>
       <button onClick={() => void openRecords()} title="查看各章生成的时间、模型与结果">生成记录</button>
+      {docId && (
+        <button
+          title="刷新图资源：从 PDF 提取插图并修复笔记中的图片引用（无需重新导入）"
+          onClick={() => {
+            setToast("正在刷新图资源…");
+            void api
+              .refreshFigures(docId)
+              .then((r) => {
+                setToast("图资源已刷新：登记 " + r.figures + " 张图，修复 " + r.patched_blocks + " 个块的引用");
+                void useStore.getState().loadBlocks();
+              })
+              .catch((e: any) => setToast("图资源刷新失败：" + e.message));
+          }}
+        >
+          刷新图资源
+        </button>
+      )}
       <button onClick={() => openSetup(true)} title="配置指南：环境自检与首次使用引导">配置指南</button>
       <button onClick={() => openSettings(true)}>设置</button>
 

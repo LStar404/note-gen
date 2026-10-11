@@ -137,11 +137,13 @@ def _split_page(page_data: dict) -> list[_Item]:
             level = int(blk.get("level") or 2)
             items.append(_Item(text, "heading", page, list(blk["bbox"]),
                                heading_level=min(6, max(1, level))))
-        elif btype in ("formula", "figure", "table"):
+        elif btype in ("formula", "table"):
             flush()
-            content = text
-            if btype == "figure":
-                content = f"![{blk.get('figure_id') or 'fig_unknown'}]"
+            items.append(_Item(text, btype, page, list(blk["bbox"])))
+        elif btype == "figure":
+            # 图是旁置元素：不得打断正文段落合并——否则补图重锚定时
+            # 段落边界漂移、锚点 id 变化，既有块的 sources 全部对不上（5.5）
+            content = f"![{blk.get('figure_id') or 'fig_unknown'}] {text}".strip()
             items.append(_Item(content, btype, page, list(blk["bbox"])))
         else:
             prev_text = (buf[-1].get("text") or "").rstrip() if buf else ""
@@ -403,6 +405,10 @@ def _migrate_sources(store: DocStore, doc_id: str, chapter_id: str,
     old_by_id = {r["anchor_id"]: r for r in old_rows}
     remap: dict[str, str] = {}
     unresolved: list[dict] = []
+    # 其它章锚点不参与本次替换（逐章独立锚定），块引用它们不算断链——
+    # 否则逐章重锚定时每个非末章都误报全书其它章的来源断裂（实测 73 条假警报）
+    other_ids = {r["anchor_id"] for ch2 in store.chapter_ids() if ch2 != chapter_id
+                 for r in store.anchor_rows(ch2)}
 
     for old_id, old in old_by_id.items():
         if old_id in new_ids:
@@ -420,7 +426,7 @@ def _migrate_sources(store: DocStore, doc_id: str, chapter_id: str,
     for b in store.all_block_rows(include_deleted=True):
         for src in b.get("sources", []):
             aid = src["anchor_id"]
-            if aid in new_ids:
+            if aid in new_ids or aid in other_ids:
                 continue
             if aid in remap:
                 continue
