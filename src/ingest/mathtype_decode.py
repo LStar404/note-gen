@@ -24,7 +24,7 @@ MT2_SYMBOLS: dict[str, str] = {
     "ellipsis": "\u2209", "STX": "\u00d7", "ESC": "\u2283", "r": "\u2228",
     "k": "\u2225", "question": "\u22a5", "four": "\u25b3", "dagger": "\u2220",
     "less": "<", "greater": ">", "SOH": "\u00b7", "j": "|", "n": "\u2216",
-    "six": "\u22ee", "Q": "\u03be", "seven": "\u2020", "p": "\u221a",
+    "six": "\u0338", "Q": "\u03be", "seven": "\u2020", "p": "\u221a",
     "caron": "|", "CR": "\u03b3", "DC2": "\u03b8", "at": "\u2202",
 }
 
@@ -37,6 +37,35 @@ MT2_ITALIC: dict[str, str] = {
     "c129": "\u0394", "NUL": "\u2212", "SOH": "\u00b7", "caron": "|",
 }
 
+# MT2SYAT/MT2SYAS：关系符族——与 SYT 编码不同！six=\u2264（楔形+横杠）、greater=\u2265
+# （2026-10-12 轮廓取证：six/greater 均带横杠，与 SYT 的 six=否定斜杠完全不同）
+MT2_RELATIONS: dict[str, str] = {
+    "six": "\u2264", "greater": "\u2265",
+}
+
+# MT2EXA：大定界符分片（仅收录轮廓/语境确认项）
+MT2_BIGOPS: dict[str, str] = {
+    "backslash": "\u22c2",    # \u22c2 大交（圆顶两腿，语境 \u22c2_{n=1}^{\u221e}F_n）
+    "bracketleft": "\u22c3",  # \u22c3 大并（语境 \u22c3_\u03b3 D_\u03b3）
+}
+
+# MT2SYT.six 是「否定斜杠」，画在被否定符号上（six,DC1→\u2262；six,two→\u2209）。
+# 单字形解码只能给出组合符 \u0338；拼接后由本函数归位并合成预组合字符。
+_NEG_OVERLAY = "\u0338"
+
+
+def combine_negations(text: str) -> str:
+    r"""把解码流中的否定斜杠组合符移到被否定符号之后并合成预组合字符。
+
+    decode_glyph 对 MT2SYT.six 返回 U+0338（长斜线覆盖符），但该字形画在
+    后随符号之上，拼接顺序是「斜杠在前」。本函数把 (\u0338)(X) 转成 X\u0338，
+    再做 NFC 归一：\u2261\u0338→≢、\u2208\u0338→∉、=\u0338→≠。
+    """
+    import re as _re
+    import unicodedata as _ud
+    moved = _re.sub(_NEG_OVERLAY + "(.)", lambda m: m.group(1) + _NEG_OVERLAY, text)
+    return _ud.normalize("NFC", moved)
+
 # MSBM10：AMS 黑板体字母（编码名 = 字母）
 MSBM_MAP: dict[str, str] = {
     "C": "\u2102", "F": "\ud835\udd3d", "N": "\u2115", "R": "\u211d", "Z": "\u2124",
@@ -45,9 +74,10 @@ MSBM_MAP: dict[str, str] = {
 
 _MT2_FAMILIES: dict[str, dict[str, str]] = {
     "MT2SYT": MT2_SYMBOLS, "MT2SYS": MT2_SYMBOLS, "MT2SYF": MT2_SYMBOLS,
-    "MT2SYAT": MT2_SYMBOLS, "MT2SYAS": MT2_SYMBOLS,
+    "MT2SYAT": MT2_RELATIONS, "MT2SYAS": MT2_RELATIONS,
     "MT2MIT": MT2_ITALIC, "MT2MIS": MT2_ITALIC, "MT2MIF": MT2_ITALIC,
     "MT2BMIT": MT2_ITALIC,
+    "MT2EXA": MT2_BIGOPS,
 }
 
 
@@ -65,9 +95,12 @@ def decode_glyph(font: str, glyph_name: str, ucs: int) -> str:
         out = MSBM_MAP.get(glyph_name, ch)
     else:
         out = ch
-    # 未收录编码的回退值多为定界符分片/杂符号：控制字符与间距修饰符直接丢弃
+    # 未收录编码的回退值多为定界符分片/杂符号：控制字符与间距修饰符直接丢弃。
+    # U+0338（否定斜杠组合符，MT2SYT.six）是刻意输出的例外。
     if len(out or "") == 1:
         o = ord(out)
+        if o == 0x0338:
+            return out
         if (o < 0x20 and out not in "\t\n") or 0x02B0 <= o <= 0x02FF or 0x0300 <= o <= 0x036F:
             return ""
     return out

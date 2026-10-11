@@ -21,6 +21,27 @@ def test_italic_family_decoding():
     assert decode_glyph("MT2MIT", "a", 97) == "a"            # 字母原样
 
 
+def test_relation_family_not_vertical_ellipsis():
+    """SYAT/SYAS 的 six 是 <=（楔形+横杠），历史误映射成 ⋮ 波及 479 处。"""
+    assert decode_glyph("MT2SYAT", "six", 54) == "\u2264"
+    assert decode_glyph("MT2SYAS", "six", 54) == "\u2264"
+    assert decode_glyph("MT2SYAT", "greater", 62) == "\u2265"
+
+
+def test_negation_slash_combines():
+    """MT2SYT.six 是否定斜杠：与后随符号合成 ≢ / ∉。"""
+    from src.ingest.mathtype_decode import combine_negations
+    run = decode_glyph("MT2SYT", "six", 54) + decode_glyph("MT2SYT", "DC1", 0)
+    assert combine_negations(run) == "\u2262"          # ≢
+    run2 = decode_glyph("MT2SYT", "six", 54) + decode_glyph("MT2SYT", "two", 50)
+    assert combine_negations(run2) == "\u2209"         # ∉
+
+
+def test_bigop_fragments():
+    assert decode_glyph("MT2EXA", "backslash", 92) == "\u22c2"   # ⋂
+    assert decode_glyph("MT2EXA", "bracketleft", 91) == "\u22c3"  # ⋃
+
+
 def test_blackboard_and_unknown_fallback():
     assert decode_glyph("MSBM10", "R", 82) == "\u211d"
     assert decode_glyph("MSBM10", "C", 67) == "\u2102"
