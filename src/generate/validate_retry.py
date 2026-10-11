@@ -36,6 +36,9 @@ def validate_outline_payload(payload: dict, *, anchor_ids: set[str], profile: st
     if not isinstance(payload, dict) or not isinstance(payload.get("blocks"), list):
         raise SchemaViolation("outline 输出缺少 blocks 数组")
     blocks = payload["blocks"]
+    for item in blocks:
+        if isinstance(item, dict) and isinstance(item.get("title"), str):
+            item["title"] = item["title"].replace(chr(0), chr(92))
     from src.core.block_types import type_enum
 
     allowed_types = set(type_enum(profile))
@@ -108,6 +111,13 @@ def validate_fill_payload(payload: dict, *, allowed_anchor_ids: set[str],
                           check_quotes: bool = True) -> dict:
     if not isinstance(payload, dict):
         raise SchemaViolation("fill 输出不是对象")
+    # NUL 净化：笔记文本里 NUL 永不合法。实测偶发 \u0000 出现在 LaTeX
+    # 反斜杠位置（源不可复现：解析器/序列化器/模型直测均干净）——
+    # 在入库闸门统一还原为反斜杠，无论上游怎么犯，存储层不再被污染
+    for key in ("content", "title"):
+        v = payload.get(key)
+        if isinstance(v, str) and chr(0) in v:
+            payload[key] = v.replace(chr(0), chr(92))
     for field in ("content", "content_format", "tags", "sources_patch", "basis"):
         if field not in payload:
             raise SchemaViolation(f"fill 输出缺少必填字段 {field}")
