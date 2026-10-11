@@ -72,6 +72,17 @@ def test_bigop_fragment_glyphs_dropped():
     assert decode_glyph("MT2EXA", "backslash", 92) == "\u22c2"
 
 
+def test_decode_font_text_uses_basefont():
+    """pypdf 适配器按 /BaseFont 解码（带子集前缀）。"""
+    from src.ingest.parse_pdf import _decode_font_text
+
+    fd = {"/BaseFont": "/ABCDEF+MT2SYT"}
+    assert _decode_font_text(fd, "a2b") == "a\u2208b"
+    # 非 MT2 字体与缺 font_dict 均原样
+    assert _decode_font_text({"/BaseFont": "/XYZ+FZSSK"}, "中文") == "中文"
+    assert _decode_font_text(None, "raw") == "raw"
+
+
 def test_blackboard_and_unknown_fallback():
     assert decode_glyph("MSBM10", "R", 82) == "\u211d"
     assert decode_glyph("MSBM10", "C", 67) == "\u2102"

@@ -25,6 +25,15 @@ from src.core.text import doc_namespace, utc_now_iso
 from .chapter_detect import detect_chapters
 from .figure_crop import crop_figure
 from .formula_ocr import FormulaOCR
+from .mathtype_decode import decode_mt2_text
+
+
+def _decode_font_text(font_dict, text: str) -> str:
+    """按绘制字体解码文本（MathType MT2 字形名错位恢复，4.3 附录）。"""
+    base = ""
+    if isinstance(font_dict, dict):
+        base = str(font_dict.get("/BaseFont") or font_dict.get("BaseFont") or "")
+    return decode_mt2_text(base.lstrip("/"), text)
 
 PAGE_JSON_VERSION = "1"
 
@@ -122,6 +131,7 @@ class PypdfAdapter(ParserAdapter):
         def visitor(text, cm, tm, font_dict, font_size):
             if not text or not text.strip():
                 return
+            text = _decode_font_text(font_dict, text)
             a1, b1, c1, d1, e1, f1 = cm
             a2, b2, c2, d2, e2, f2 = state["tm"]
             x = a1 * e2 + c1 * f2 + e1
