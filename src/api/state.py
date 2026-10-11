@@ -36,6 +36,16 @@ class AppState:
         self.client.config = self.config
         return self.config
 
+    def invalidate_client(self) -> None:
+        """供应商/路由变更后重建 LLM 客户端。
+
+        OpenAICompatAdapter 在创建时就把 base_url 与 API Key 固化进实例，
+        LLMClient 又按 provider_id 缓存适配器——界面里改完 key 若不重建，
+        运行中的服务会继续用旧 key 发请求（用户实测「换了 key 仍然无效」，
+        只能重启服务才生效）。这里整体重建，改完立即生效。
+        """
+        self.client = LLMClient(self.registry, self.runtime, self.config)
+
     def save_model_routes(self, routes: dict) -> dict:
         cfg = dict(self.config)
         gen = dict(cfg.get("generate", {}))

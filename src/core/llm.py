@@ -12,7 +12,8 @@ import time
 import uuid
 from typing import Any, Protocol
 
-from .errors import AuthError, LLMError, NoteGenError, PriceUnknown, RetryableError
+from .errors import (AuthError, LLMError, NoteGenError, PriceUnknown, QuotaExhausted,
+                     RetryableError)
 from .model_registry import ModelRegistry
 from .text import estimate_tokens
 
@@ -23,6 +24,33 @@ class LLMProvider(Protocol):
                  tools: list[dict] | None = None, tool_choice: str | dict | None = None,
                  json_schema: bool = True, context: dict | None = None,
                  reasoning_effort: str | None = None) -> dict: ...
+
+
+# 配额/欠费用语（上游各家的说法）：用于把「额度用尽」从普通限流里区分出来。
+_QUOTA_WORDS = ("quota", "insufficient", "exhausted", "balance", "credit", "billing",
+                "arrears", "欠费", "额度", "余额", "配额")
+
+
+def _upstream_message(resp) -> str:
+    """从错误响应里取出可读的上游信息（quota exhausted / Invalid API Key 之类）。"""
+    try:
+        data = resp.json()
+    except Exception:
+        return (resp.text or "").strip().replace("\n", " ")[:160]
+    if isinstance(data, dict):
+        err = data.get("error")
+        if isinstance(err, dict):
+            return str(err.get("message") or err.get("code") or "")[:160]
+        if isinstance(err, str):
+            return err[:160]
+        if data.get("message"):
+            return str(data["message"])[:160]
+    return (resp.text or "").strip().replace("\n", " ")[:160]
+
+
+def _looks_like_quota(message: str) -> bool:
+    low = (message or "").lower()
+    return any(w in low for w in _QUOTA_WORDS)
 
 
 def _json_mode_messages(messages: list[dict]) -> list[dict]:
@@ -81,11 +109,23 @@ class OpenAICompatAdapter:
                               timeout=self.timeout)
         except Exception as exc:  # 传输层失败按可重试处理（10.4）
             raise RetryableError(f"LLM 请求失败: {exc}")
+        upstream = _upstream_message(resp)
         if resp.status_code in (401, 403):
             # 鉴权失败重试不可能成功：立即上抛，别让用户等满退避才看到含混提示
             raise AuthError(
                 f"LLM 鉴权失败 {resp.status_code}：API Key 无效或无权访问模型 {model}"
-                f"（供应商 {self.provider_id}）——请在「配置指南 → 接入模型」核对密钥与模型 id",
+                f"（供应商 {self.provider_id}）"
+                + (f"｜上游：{upstream}" if upstream else "")
+                + "——请在「设置 → 供应商」核对密钥与模型 id（改完立即生效，无需重启）",
+                detail={"provider_id": self.provider_id, "status": resp.status_code,
+                        "body": resp.text[:500]})
+        if resp.status_code == 402 or (resp.status_code == 429 and _looks_like_quota(upstream)):
+            # 配额用尽 ≠ 限流：重试多少次都一样，而且按块隔离会把整章块逐个标失败。
+            # 整章快速上抛，任务结局直接给出「配额已用尽」这种可操作结论。
+            raise QuotaExhausted(
+                f"模型 {model} 配额已用尽（HTTP {resp.status_code}"
+                + (f" {upstream}" if upstream else "")
+                + f"，供应商 {self.provider_id}）——请为该供应商充值/更换 API Key 或改用其它模型",
                 detail={"provider_id": self.provider_id, "status": resp.status_code,
                         "body": resp.text[:500]})
         if resp.status_code in (429, 500, 502, 503, 504):
@@ -160,6 +200,9 @@ class DummyProvider:
 
 
 def json_repair_loads(text: str) -> Any:
+    from .text import repair_json_escapes
+
+    text = repair_json_escapes(text or "")
     try:
         return json.loads(text)
     except Exception:

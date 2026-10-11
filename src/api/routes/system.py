@@ -38,6 +38,9 @@ def upsert_provider(request: Request, provider_id: str, body: dict):
     st = state(request)
     body["id"] = provider_id
     st.registry.upsert_provider(body)
+    # 换 key / 改 base_url 必须重建客户端：适配器把密钥固化在实例里，
+    # 不重建则要重启服务才生效（用户实测「换了 key 仍无效」的直接原因）
+    st.invalidate_client()
     return st.registry.masked_provider(st.registry.provider(provider_id))
 
 
@@ -45,6 +48,7 @@ def upsert_provider(request: Request, provider_id: str, body: dict):
 def delete_provider(request: Request, provider_id: str):
     st = state(request)
     st.registry.delete_provider(provider_id, st.routed_models())
+    st.invalidate_client()
     return {"deleted": provider_id}
 
 
@@ -59,6 +63,7 @@ def update_routes(request: Request, body: dict):
                 if not caps.get("tools"):
                     raise InputError(f"模型 {name} 缺少 tools 能力，不能用于 agent 任务")
     st.save_model_routes(body or {})
+    st.invalidate_client()
     return {"routes": st.config.get("generate", {}).get("models", {})}
 
 

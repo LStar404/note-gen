@@ -16,8 +16,14 @@ CODE_FENCE = re.compile(_FENCE + ".*?" + _FENCE, re.DOTALL)
 def parse_json_output(text: str) -> Any:
     import json
 
+    from src.core.text import repair_json_escapes
+
     if isinstance(text, (dict, list)):
         return text
+    if isinstance(text, str):
+        # 裸 LaTeX 撞上 JSON 转义（"\bigcap" → 0x08 + "igcap"）必须在 json.loads 之前修，
+        # 否则 json 会把 \b/\t 当合法转义悄悄吃掉反斜杠（渲染成 "Digcap" 这类破公式）
+        text = repair_json_escapes(text)
     try:
         return json.loads(text)
     except Exception:
@@ -36,9 +42,11 @@ def validate_outline_payload(payload: dict, *, anchor_ids: set[str], profile: st
     if not isinstance(payload, dict) or not isinstance(payload.get("blocks"), list):
         raise SchemaViolation("outline 输出缺少 blocks 数组")
     blocks = payload["blocks"]
+    from src.core.text import sanitize_control_chars
+
     for item in blocks:
         if isinstance(item, dict) and isinstance(item.get("title"), str):
-            item["title"] = item["title"].replace(chr(0), chr(92))
+            item["title"] = sanitize_control_chars(item["title"])
     from src.core.block_types import type_enum
 
     allowed_types = set(type_enum(profile))
@@ -111,13 +119,16 @@ def validate_fill_payload(payload: dict, *, allowed_anchor_ids: set[str],
                           check_quotes: bool = True) -> dict:
     if not isinstance(payload, dict):
         raise SchemaViolation("fill 输出不是对象")
-    # NUL 净化：笔记文本里 NUL 永不合法。实测偶发 \u0000 出现在 LaTeX
-    # 反斜杠位置（源不可复现：解析器/序列化器/模型直测均干净）——
-    # 在入库闸门统一还原为反斜杠，无论上游怎么犯，存储层不再被污染
+    # 控制字符净化（入库闸门，见 core.text.sanitize_control_chars）：
+    # JSON 转义撞车会把裸 LaTeX 的 \b/\t/\f/\n/\r/\u 吃成控制字符——
+    # \bigcap 存成 0x08+"igcap"，渲染出来正是用户看到的 "Digcap" 破公式。
+    # 无论上游怎么犯，存储层都不再被污染。
+    from src.core.text import sanitize_control_chars
+
     for key in ("content", "title"):
         v = payload.get(key)
-        if isinstance(v, str) and chr(0) in v:
-            payload[key] = v.replace(chr(0), chr(92))
+        if isinstance(v, str):
+            payload[key] = sanitize_control_chars(v)
     for field in ("content", "content_format", "tags", "sources_patch", "basis"):
         if field not in payload:
             raise SchemaViolation(f"fill 输出缺少必填字段 {field}")
