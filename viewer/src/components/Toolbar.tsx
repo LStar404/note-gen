@@ -266,6 +266,32 @@ export default function Toolbar() {
         </button>
       )}
 
+      {docId && (
+        <button
+          title="重建导入：重新解析 PDF 并重新识别章节（无需重新上传）。仅当文档没有笔记块时可用"
+          onClick={() => {
+            const doc = docs.find((d) => d.doc_id === docId);
+            const ok = window.confirm(
+              "重建导入《" + (doc?.title ?? docId) + "》？\n\n" +
+              "· 重新解析 PDF（拾取最新解析器，如中文保真抽取）\n" +
+              "· 重新识别章节（拾取最新分章规则）\n" +
+              "· 重新生成锚点与索引；需要文档当前没有笔记块\n" +
+              "· PDF 不变，无需重新上传"
+            );
+            if (!ok) return;
+            void api
+              .rebuildDoc(docId)
+              .then((r: any) => {
+                track(r.task_id, "import");
+                setToast("重建任务已启动：" + r.task_id);
+              })
+              .catch((e: any) => setToast("重建失败：" + e.message));
+          }}
+        >
+          重建导入
+        </button>
+      )}
+
       <button onClick={doGenerate}>生成本章</button>
       <button onClick={() => void doExport("md")}>导出 md</button>
       <button onClick={() => void doExport("tex")}>导出 tex</button>

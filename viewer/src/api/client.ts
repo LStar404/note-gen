@@ -52,6 +52,8 @@ export const api = {
   getManifest: (docId: string) => api.get<any>("/api/v1/docs/" + docId),
   deleteDoc: (docId: string) =>
     api.del<any>("/api/v1/docs/" + docId, { confirmed: true }),
+  rebuildDoc: (docId: string) => api.post<{ task_id: string; doc_id: string }>(
+    "/api/v1/docs/" + docId + "/rebuild", {}),
   pdfUrl: (docId: string) => "/api/v1/docs/" + docId + "/pdf",
   figureUrl: (docId: string, figureId: string) => "/api/v1/docs/" + docId + "/figures/" + figureId,
   listBlocks: (docId: string, chapterId: string, includeDeleted = false) =>

@@ -100,6 +100,55 @@ async def create_doc(request: Request, file: UploadFile = File(...), title: str 
     return JSONResponse({"task_id": task["task_id"], "doc_id": doc}, status_code=202)
 
 
+@router.post("/api/v1/docs/{doc_id}/rebuild")
+def rebuild_doc(request: Request, doc_id: str, body: dict | None = None):
+    """重建导入（不重新上传 PDF）：重跑解析 + 分章 + 锚定，
+    用于拾取新的解析器（如中文保真抽取）与新的分章规则。
+    仅允许无笔记块的文档——已有块按旧 chapter_id 归属，重建会错位。"""
+    st = state(request)
+    store = DocStore(st.layout, doc_id)
+    manifest = store.manifest()
+    if store.all_block_rows(include_deleted=False):
+        raise ConflictError(
+            "文档已有笔记块，重建导入会使其与新章节错位；请先导出笔记或删除块后再试",
+            code="HAS_BLOCKS")
+    pdf = st.layout.root / manifest["pdf_path"]
+    if not pdf.exists():
+        raise NotFound("PDF 文件不存在，无法重建")
+    title = manifest.get("title")
+    profile = manifest.get("profile", "textbook")
+
+    def run(req, progress, is_cancelled, register_artifact, task_id=None):
+        import shutil
+
+        from src.anchor.chunker import chunk_and_anchor
+        from src.db.runtime import get_runtime
+
+        # 旧解析/锚定/图资源整体作废（PDF 保留在 data/textbooks 不动）
+        shutil.rmtree(st.layout.doc_dir(doc_id), ignore_errors=True)
+        shutil.rmtree(st.layout.ingest_root / doc_id, ignore_errors=True)
+        get_runtime(st.layout.runtime_db).forget_doc(doc_id)
+        progress({"stage": "ingest", "pages_done": 0, "pages_total": None})
+        manifest_new = parse_pdf_with_fallback(
+            pdf, st.layout.ingest_root, st.config.get("parser", {}).get("default", "auto"),
+            layout=st.layout, doc_id=doc_id, profile=profile, title=title,
+            config=st.config, progress=progress)
+        chapters = manifest_new["chapters"]
+        counts = {}
+        for idx, ch in enumerate(chapters):
+            if is_cancelled():
+                raise TaskCancelled("任务已取消")
+            progress({"stage": "anchor", "done": idx, "total": len(chapters),
+                      "chapter_id": ch["chapter_id"]})
+            counts[ch["chapter_id"]] = chunk_and_anchor(doc_id, ch["chapter_id"], layout=st.layout)
+        progress({"stage": "anchor", "done": len(chapters), "total": len(chapters)})
+        return {"doc_id": doc_id, "chapters": chapters, "anchors": counts}
+
+    task = st.tasks.submit("import", run, {"doc_id": doc_id, "mode": "rebuild"},
+                           doc_id=doc_id)
+    return JSONResponse({"task_id": task["task_id"], "doc_id": doc_id}, status_code=202)
+
+
 @router.get("/api/v1/docs/{doc_id}")
 def get_doc(request: Request, doc_id: str):
     st = state(request)
