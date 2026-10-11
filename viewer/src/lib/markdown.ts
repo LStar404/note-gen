@@ -7,6 +7,7 @@
 
 import MarkdownIt from "markdown-it";
 import katex from "katex";
+import "katex/dist/katex.min.css";   // KaTeX 字体/排版样式：缺了公式显示为乱排的 HTML
 
 export interface RenderEnv {
   docId: string;
@@ -142,6 +143,30 @@ const renderer = createRenderer();
 
 export function renderMarkdown(content: string, docId: string, captions: Record<string, string> = {}): string {
   return renderer.render(content || "", { docId, captions } as RenderEnv);
+}
+
+/** 卡片预览截断：按行边界截，绝不切断公式——
+ *  $…$ 成对保留；$$…$$ 块整体保留或整体丢弃（截断后计数为奇数就回退到开标记前）。 */
+export function previewSource(content: string, maxChars = 320): string {
+  const src = content || "";
+  if (src.length <= maxChars) return src;
+  let cut = src.lastIndexOf("\n", maxChars);
+  if (cut < 40) cut = maxChars;
+  let head = src.slice(0, cut);
+  const dbl = (head.match(/\$\$/g) || []).length;
+  if (dbl % 2 === 1) {
+    head = head.slice(0, head.lastIndexOf("$$"));
+  }
+  const single = (head.replace(/\$\$/g, "").match(/\$/g) || []).length;
+  if (single % 2 === 1) {
+    head = head.slice(0, head.lastIndexOf("$"));
+  }
+  return head.trimEnd() + "\n…";
+}
+
+/** 卡片预览 HTML：与「预览」视图同一渲染器（markdown + KaTeX）。 */
+export function previewHtml(content: string, docId: string): string {
+  return renderMarkdown(previewSource(content), docId ?? "", {});
 }
 
 /** 图占位符重写（供导出对照逻辑复用）；代码/数学区不改写。 */

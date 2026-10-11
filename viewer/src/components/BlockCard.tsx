@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { api } from "../api/client";
 import { RELATION_CN, STATUS_CN, type NoteBlock } from "../api/types";
+import { previewHtml } from "../lib/markdown";
 import { useStore } from "../state/store";
 
 export { STATUS_CN };
@@ -22,6 +23,7 @@ export default function BlockCard({ block, selected, onSelect }: {
   onSelect: (id: string) => void;
 }) {
   const fetchAnchors = useStore((s) => s.fetchAnchors);
+  const docId = useStore((s) => s.docId);
   // 订阅粒度：只取本卡来源的页码字符串（原始值比较），避免任意锚点更新导致全部卡片重渲染
   const sourceKey = useStore((s) =>
     block.sources.map((src) => (s.anchors[src.anchor_id]?.page ?? "?")).join("|"));
@@ -56,7 +58,11 @@ export default function BlockCard({ block, selected, onSelect }: {
         {block.generation_protected && <span className="badge protected">已保护</span>}
         {block.basis === "synthesis" && <span className="badge synthesis">AI 归纳</span>}
       </div>
-      <div className="block-preview">{(block.content || "").slice(0, 120)}</div>
+      {/* 卡片正文走与「预览」同一渲染器（markdown + KaTeX），不再显示裸文本 */}
+      <div
+        className="block-preview"
+        dangerouslySetInnerHTML={{ __html: previewHtml(block.content || "", docId ?? "") }}
+      />
       <div className="block-sources">
         {block.sources.map((s, i) => (
           <button
