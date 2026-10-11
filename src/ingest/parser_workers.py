@@ -484,12 +484,13 @@ def _decode_spans(spans: list[dict]) -> str:
     root = str(Path(__file__).resolve().parents[2])
     if root not in sys.path:
         sys.path.insert(0, root)
+    from src.core.text import repair_surrogates
     from src.ingest.mathtype_decode import combine_negations, decode_mt2_text
     parts = [
         decode_mt2_text(str(sp.get("font") or ""), sp.get("text", ""), combine=False)
         for sp in spans
     ]
-    return combine_negations("".join(parts))
+    return combine_negations(repair_surrogates("".join(parts)))
 
 
 def _fitz_line_type(text: str, size: float, body: float) -> tuple[str, int]:

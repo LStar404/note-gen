@@ -68,7 +68,9 @@ def combine_negations(text: str) -> str:
 
 # MSBM10：AMS 黑板体字母（编码名 = 字母）
 MSBM_MAP: dict[str, str] = {
-    "C": "\u2102", "F": "\ud835\udd3d", "N": "\u2115", "R": "\u211d", "Z": "\u2124",
+    # 一律用 \U 八位转义：\uD835\uDD3D 这类代理对字面量在 Python 源码里是
+    # 两个非法代理字符，进 JSON（ensure_ascii=False）写盘直接 UnicodeEncodeError
+    "C": "\u2102", "F": "\U0001D53D", "N": "\u2115", "R": "\u211d", "Z": "\u2124",
     "H": "\u210d", "P": "\u2119", "Q": "\u211a",
 }
 

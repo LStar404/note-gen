@@ -134,6 +134,33 @@ def repair_json_escapes(raw: str) -> str:
     return _INVALID_ESCAPE_RE.sub(_invalid, raw)
 
 
+def repair_surrogates(text: str) -> str:
+    r"""修复 UTF-16 代理对/孤儿代理（pypdf 对 >BMP 字符的抽取产物）。
+
+    合法代理对合并为真实码点（Mathematical Double-Struck 等数学字母）；
+    孤儿代理无意义，直接丢弃。不修则 json.dumps(ensure_ascii=False) 写盘
+    直接 UnicodeEncodeError（整书摄取硬崩溃）。
+    """
+    if not text:
+        return text
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        o = ord(text[i])
+        if 0xD800 <= o <= 0xDBFF and i + 1 < n:
+            o2 = ord(text[i + 1])
+            if 0xDC00 <= o2 <= 0xDFFF:
+                out.append(chr(0x10000 + ((o - 0xD800) << 10) + (o2 - 0xDC00)))
+                i += 2
+                continue
+        if 0xD800 <= o <= 0xDFFF:
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 # 控制字符 → LaTeX。0x00/0x08/0x0b/0x0c 在笔记里永远不合法（无条件还原）；
 # 0x09/0x0d 可能合法（缩进/回车），只在能构成已知命令时还原。
 # 0x0a（换行）在文本里太常见，只由 parse 前的 repair_json_escapes 处理。

@@ -22,6 +22,7 @@ from src.core.models import Manifest
 from src.core.paths import Layout, rel_to_root
 from src.core.text import doc_namespace, utc_now_iso
 
+from ..core.text import repair_surrogates
 from .chapter_detect import detect_chapters
 from .figure_crop import crop_figure
 from .formula_ocr import FormulaOCR
@@ -29,11 +30,14 @@ from .mathtype_decode import decode_mt2_text
 
 
 def _decode_font_text(font_dict, text: str) -> str:
-    """按绘制字体解码文本（MathType MT2 字形名错位恢复，4.3 附录）。"""
+    """按绘制字体解码文本（MathType MT2 字形名错位恢复，4.3 附录）。
+
+    pypdf 对 >BMP 字符产出 UTF-16 代理对，进 JSON 写盘必崩——一并修复。
+    """
     base = ""
     if isinstance(font_dict, dict):
         base = str(font_dict.get("/BaseFont") or font_dict.get("BaseFont") or "")
-    return decode_mt2_text(base.lstrip("/"), text)
+    return repair_surrogates(decode_mt2_text(base.lstrip("/"), text))
 
 PAGE_JSON_VERSION = "1"
 
