@@ -78,6 +78,7 @@ def anchor_detail(layout: Layout, doc_id: str, anchor_id: str) -> dict | None:
 
 
 def block_detail(layout: Layout, doc_id: str, block_id: str) -> dict | None:
+    _ensure_index(layout, doc_id)
     conn = _connect(layout.index_db(doc_id))
     if conn is None:
         return None
@@ -113,6 +114,7 @@ def search_anchors(layout: Layout, doc_id: str, query: str, limit: int = 8) -> l
 def search_semantic(layout: Layout, doc_id: str, query_vec: list[float], *, k: int = 8,
                     threshold: float = 0.55) -> list[dict]:
     """语义兜底（6.3.3）：sqlite-vec Top-K，cosine ≥ threshold；不可用时返回空由 FTS 兜底。"""
+    _ensure_index(layout, doc_id)
     from src.db.vec import search_vec
 
     return search_vec(layout, doc_id, query_vec, k=k, threshold=threshold)

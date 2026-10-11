@@ -14,22 +14,32 @@ from src.db.vec import DEFAULT_DIM, rebuild_vectors
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
+def _sha(payload) -> str:
+    return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def anchors_fingerprint(anchors: list[dict]) -> str:
+    return _sha([[a.get("anchor_id"), a.get("content"), a.get("text_hash")]
+                 for a in sorted(anchors, key=lambda x: x["anchor_id"])])
+
+
+def blocks_fingerprint(blocks: list[dict]) -> str:
+    # 块的 sources 决定 anchor_blocks 派生表，同样纳入指纹
+    return _sha([[b.get("id"), b.get("revision"), b.get("title"), b.get("status"),
+                  b.get("order"), b.get("deleted_at"),
+                  [s.get("anchor_id") for s in b.get("sources") or []]]
+                 for b in sorted(blocks, key=lambda x: x["id"])])
+
+
 def source_fingerprint(anchors: list[dict], blocks: list[dict]) -> str:
     """主数据内容指纹：以 content 为准（text_hash 可能滞后于直改内容）。
 
     只计数/revision 的旧指纹对「直接改写 JSONL 的离线修复」视而不见，
-    索引静默滞后、检索与锚点面板返回旧乱码——指纹必须覆盖内容本身；
-    块的 sources 决定 anchor_blocks 派生表，同样纳入指纹。
+    索引静默滞后、检索与锚点面板返回旧乱码——指纹必须覆盖内容本身。
+    两段式「锚点段|块段」：blocks_only 快路径只换块段、保留锚点段，
+    否则快路径写出的部分指纹会让每次进程重启都误判失配、全量重建。
     """
-    payload = {
-        "anchors": [[a.get("anchor_id"), a.get("content"), a.get("text_hash")]
-                    for a in sorted(anchors, key=lambda x: x["anchor_id"])],
-        "blocks": [[b.get("id"), b.get("revision"), b.get("title"), b.get("status"),
-                    b.get("order"), b.get("deleted_at"),
-                    [s.get("anchor_id") for s in b.get("sources") or []]]
-                   for b in sorted(blocks, key=lambda x: x["id"])],
-    }
-    return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+    return anchors_fingerprint(anchors) + "|" + blocks_fingerprint(blocks)
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -139,10 +149,17 @@ def reindex_doc(layout: Layout, doc_id: str, vec_dim: int | None = None,
             except Exception:
                 pass
 
+            fp_blocks = blocks_fingerprint(blocks)
+            if blocks_only:
+                # 锚点未变：保留已有锚点段（缺历史值时留空 → 下次校验判失配走全量，正确）
+                old = conn.execute("SELECT source_hash FROM index_meta WHERE singleton=1").fetchone()
+                anchors_part = ((old["source_hash"] or "").split("|")[0] if old else "")
+            else:
+                anchors_part = anchors_fingerprint(anchors)
             conn.execute("INSERT OR REPLACE INTO index_meta(singleton,source_revision,source_hash)"
                          " VALUES(1,?,?)",
                          (int(manifest.get("data_revision", 0)),
-                          source_fingerprint(anchors, blocks)))
+                          anchors_part + "|" + fp_blocks))
         return {"doc_id": doc_id, "anchors": len(anchors), "blocks": len(blocks),
                 "vectors": vec_count}
     finally:
