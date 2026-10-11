@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from pathlib import Path
 
@@ -11,6 +12,24 @@ from src.core.store import DocStore
 from src.db.vec import DEFAULT_DIM, rebuild_vectors
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+
+
+def source_fingerprint(anchors: list[dict], blocks: list[dict]) -> str:
+    """主数据内容指纹：以 content 为准（text_hash 可能滞后于直改内容）。
+
+    只计数/revision 的旧指纹对「直接改写 JSONL 的离线修复」视而不见，
+    索引静默滞后、检索与锚点面板返回旧乱码——指纹必须覆盖内容本身；
+    块的 sources 决定 anchor_blocks 派生表，同样纳入指纹。
+    """
+    payload = {
+        "anchors": [[a.get("anchor_id"), a.get("content"), a.get("text_hash")]
+                    for a in sorted(anchors, key=lambda x: x["anchor_id"])],
+        "blocks": [[b.get("id"), b.get("revision"), b.get("title"), b.get("status"),
+                    b.get("order"), b.get("deleted_at"),
+                    [s.get("anchor_id") for s in b.get("sources") or []]]
+                   for b in sorted(blocks, key=lambda x: x["id"])],
+    }
+    return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -120,18 +139,35 @@ def reindex_doc(layout: Layout, doc_id: str, vec_dim: int | None = None,
             except Exception:
                 pass
 
-            source_hash = canonical_json({
-                "anchors": len(anchors), "blocks": len(blocks),
-                "revision": manifest.get("data_revision")})
-            import hashlib
             conn.execute("INSERT OR REPLACE INTO index_meta(singleton,source_revision,source_hash)"
                          " VALUES(1,?,?)",
                          (int(manifest.get("data_revision", 0)),
-                          hashlib.sha256(source_hash.encode("utf-8")).hexdigest()))
+                          source_fingerprint(anchors, blocks)))
         return {"doc_id": doc_id, "anchors": len(anchors), "blocks": len(blocks),
                 "vectors": vec_count}
     finally:
         conn.close()
+
+
+def ensure_index_fresh(layout: Layout, doc_id: str) -> bool:
+    """派生索引与主数据内容指纹比对，失配则全量重建（含 FTS/向量）。
+
+    覆盖「绕过事务直接改写 JSONL」的漂移场景（离线修复/手工订正）：
+    索引滞后时检索与锚点面板返回旧内容。返回是否发生重建。
+
+    行缓存按 data_revision 键控，直改文件不升 revision——比对前必须先失效
+    进程缓存，否则指纹读到陈旧行、漂移漏检（回归测试抓到的真 bug）。
+    """
+    DocStore._invalidate(layout, doc_id)
+    store = DocStore(layout, doc_id)
+    anchors = store.all_anchor_rows()
+    blocks = store.all_block_rows(include_deleted=True)
+    want = source_fingerprint(anchors, blocks)
+    meta = index_meta(layout, doc_id)
+    if meta and meta.get("source_hash") == want:
+        return False
+    reindex_doc(layout, doc_id)
+    return True
 
 
 def _vec_table_exists(conn: sqlite3.Connection) -> bool:

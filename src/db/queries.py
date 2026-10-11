@@ -9,6 +9,22 @@ from src.core.coord import match_scores
 from src.core.paths import Layout
 from src.core.text import search_normalize
 
+# 派生索引新鲜度守护：每进程每文档校验一次（离线修复直改 JSONL 后索引静默滞后，
+# 检索/锚点面板会返回旧内容）。进程重启即重新校验，与 store 行缓存失效模型一致。
+_FRESH_OK: set[str] = set()
+
+
+def _ensure_index(layout: Layout, doc_id: str) -> None:
+    if doc_id in _FRESH_OK:
+        return
+    try:
+        from src.db.reindex import ensure_index_fresh
+
+        ensure_index_fresh(layout, doc_id)
+    except Exception:
+        return            # 索引滞后/重建失败不阻塞读取（4.2.2：派生层尽力而为）
+    _FRESH_OK.add(doc_id)
+
 
 def _connect(db_path: Path) -> sqlite3.Connection | None:
     if not Path(db_path).exists():
@@ -19,6 +35,7 @@ def _connect(db_path: Path) -> sqlite3.Connection | None:
 
 
 def anchors_on_page(layout: Layout, doc_id: str, page: int) -> list[dict]:
+    _ensure_index(layout, doc_id)
     conn = _connect(layout.index_db(doc_id))
     if conn is None:
         return []
@@ -32,6 +49,7 @@ def anchors_on_page(layout: Layout, doc_id: str, page: int) -> list[dict]:
 
 def blocks_for_page(layout: Layout, doc_id: str, page: int) -> list[dict]:
     """教材→笔记：该页锚点 → note_block_ids → 块摘要。"""
+    _ensure_index(layout, doc_id)
     conn = _connect(layout.index_db(doc_id))
     if conn is None:
         return []
@@ -48,6 +66,7 @@ def blocks_for_page(layout: Layout, doc_id: str, page: int) -> list[dict]:
 
 
 def anchor_detail(layout: Layout, doc_id: str, anchor_id: str) -> dict | None:
+    _ensure_index(layout, doc_id)
     conn = _connect(layout.index_db(doc_id))
     if conn is None:
         return None
@@ -71,6 +90,7 @@ def block_detail(layout: Layout, doc_id: str, block_id: str) -> dict | None:
 
 def search_anchors(layout: Layout, doc_id: str, query: str, limit: int = 8) -> list[dict]:
     """FTS5 兜底；中文 trigram 不可用时退化 LIKE（附录 B）。"""
+    _ensure_index(layout, doc_id)
     conn = _connect(layout.index_db(doc_id))
     if conn is None:
         return []
