@@ -9,8 +9,9 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from src.core.errors import (ConflictError, InputError, NotFound,
-                             PipelineError, TaskCancelled)
+from src.core.errors import (ConflictError, InputError, NoteGenError,
+                             NotFound, PipelineError, PriceUnknown,
+                             TaskCancelled)
 from src.core.paths import DOC_ID_RE, FIGURE_ID_RE
 from src.core.store import DocStore
 from src.db import queries
@@ -270,9 +271,18 @@ def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
                                                 config=st.config, registry=st.registry, model=model,
                                                 merge_mode="merge", task_id=task_id,
                                                 progress=progress, is_cancelled=is_cancelled))
-            except (PipelineError, ConflictError) as exc:
+            except TaskCancelled:
+                raise
+            except PriceUnknown as exc:
+                if exc.code != "BUDGET_EXCEEDED":
+                    raise        # 配置类（未配置模型/价格未知）→ 整个任务清晰失败
+                reports.append({"doc_id": doc_id, "chapter_id": ch, "status": "failed",
+                                "failures": [{"stage": "generate", "reason": str(exc)}]})
+            except NoteGenError as exc:
                 # 4.7 PipelineError 语义：阶段性失败记录后继续其他章节——
-                # 一章缺锚点/提交冲突不得拖垮整本书的生成任务
+                # 一章缺锚点/提交冲突/校验失败不得拖垮整本书的生成任务
+                # （原实现只隔离 PipelineError/ConflictError，一章 quote 校验
+                # 失败会让后面所有章节连跑的机会都没有）
                 reports.append({"doc_id": doc_id, "chapter_id": ch, "status": "failed",
                                 "failures": [{"stage": "generate", "reason": str(exc)}]})
         if reports and all(r.get("status") == "failed" for r in reports):

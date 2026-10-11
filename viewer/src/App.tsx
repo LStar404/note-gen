@@ -35,25 +35,42 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("note-gen-col-widths", JSON.stringify(widths));
   }, [widths]);
+  // 把宽度夹到 [MIN, 可用上限]：上限 = 容器宽 - 其他两栏最小宽 - 两个拖拽把手
+  const clampWidths = (w: [number, number]): [number, number] => {
+    const total = colsRef.current?.getBoundingClientRect().width ?? window.innerWidth - 36;
+    const MIN = 180;                       // 每栏最小宽度
+    const RESERVED = 2 * 12 + 2 * MIN;     // 两个 splitter + 第三栏最小宽
+    const max0 = Math.max(MIN, total - w[1] - RESERVED);
+    const max1 = Math.max(MIN, total - w[0] - RESERVED);
+    return [Math.min(Math.max(w[0], MIN), max0), Math.min(Math.max(w[1], MIN), max1)];
+  };
+
+  // 窗口缩小时收回被挤超界的栏宽，避免横向溢出
+  useEffect(() => {
+    const onResize = () => setWidths((w) => clampWidths(w));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const startResize = (idx: 0 | 1) => (e: React.PointerEvent) => {
     e.preventDefault();
     const move = (ev: PointerEvent) => {
       const rect = colsRef.current?.getBoundingClientRect();
       if (!rect) return;
       const x = ev.clientX - rect.left;
-      setWidths(([w0, w1]) => {
-        const min = 180;                                   // 每栏最小宽度
-        const rest = rect.width - w0 - w1 - 40;            // 第三栏留出的余量
-        if (idx === 0) return [Math.min(Math.max(x, min), rect.width - w1 - min - 40), w1];
-        return [w0, Math.min(Math.max(x - w0, min), rect.width - w0 - min - 40) || rest];
-      });
+      setWidths(([w0, w1]) =>
+        idx === 0 ? clampWidths([x, w1]) : clampWidths([w0, x - w0])
+      );
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       document.body.style.cursor = "";
+      document.body.style.userSelect = "";
     };
     document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };

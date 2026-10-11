@@ -79,6 +79,33 @@ def test_one_chapter_failure_does_not_kill_the_rest(sample_doc, monkeypatch):
         assert any(x["status"] == "complete" for x in reports)
 
 
+def test_schema_failure_in_one_chapter_is_isolated(sample_doc, monkeypatch):
+    """非 Pipeline/Conflict 的业务错误（如提交校验 SchemaViolation）同样只记本章，
+    不得让后面章节失去机会（4.7 阶段性失败语义）。"""
+    from src.core.errors import SchemaViolation
+
+    c, doc_id = _client(sample_doc)
+    with c:
+        seen: list[str] = []
+
+        def fake_generate(doc_id, chapter_id, **kw):
+            seen.append(chapter_id)
+            if chapter_id == "ch01":
+                raise SchemaViolation("quote 不是锚点内容的连续子串")
+            return {"doc_id": doc_id, "chapter_id": chapter_id, "status": "complete",
+                    "created": [], "updated": [], "skipped_protected": [], "failures": []}
+
+        monkeypatch.setattr("src.generate.engine.generate_chapter", fake_generate)
+        r = c.post(f"/api/v1/docs/{doc_id}/generate", json={})
+        assert r.status_code == 202, r.text
+        t = _wait(c, r.json()["task_id"])
+        _join(c, r.json()["task_id"])
+        assert len(seen) >= 2, f"SchemaViolation 后其余章必须继续: {seen}"
+        assert t["status"] == "partial", t
+        reasons = str(t["result"]["reports"])
+        assert "quote 不是锚点内容的连续子串" in reasons
+
+
 def test_all_chapters_failed_marks_task_failed(sample_doc, monkeypatch):
     """全军覆没必须 failed 结局并带原因，不得亮绿灯（10.4）。"""
     c, doc_id = _client(sample_doc)
