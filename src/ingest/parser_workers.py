@@ -117,7 +117,7 @@ def _map_type(label: str) -> tuple[str, int]:
 # --------------------------------------------------------------------------- probe
 def probe(req: dict) -> dict:
     out = {"ok": True, "python": sys.version.split()[0], "modules": {}}
-    for name in ("marker", "docling", "pix2text", "torch", "onnxruntime", "pypdf"):
+    for name in ("marker", "docling", "pix2text", "torch", "onnxruntime", "pypdf", "pymupdf"):
         try:
             mod = __import__(name)
             out["modules"][name] = getattr(mod, "__version__", "unknown")
@@ -449,6 +449,98 @@ def pix2text_recognize(req: dict) -> dict:
     return out
 
 
+# --------------------------------------------------------------------------- pymupdf
+def _fitz_line_type(text: str, size: float, body: float) -> tuple[str, int]:
+    """行级类型启发式：大字号→标题；数学符号密集且无中文→公式；其余段落。"""
+    s = text.strip()
+    if size >= 1.25 * body and len(s) <= 80:
+        return "heading", 2
+    cjk = any("\u4e00" <= c <= "\u9fff" for c in s)
+    letters = sum(1 for c in s if c.isascii() and c.isalpha())
+    mathy = sum(1 for c in s if c in "=+-*/^_()[]{}<>|")
+    if mathy >= 2 and not cjk and letters <= 3:
+        return "formula", 0
+    return "paragraph", 0
+
+
+def pymupdf_extract(req: dict) -> dict:
+    """PyMuPDF（fitz）文本行抽取：预定义 CMap 中文 PDF（无 ToUnicode）保真，
+    速度远快于 marker。bbox 翻转 y 轴到 PDF 用户空间；旋转页不猜（5.1.5），
+    标 failed 交由上层降级。"""
+    try:
+        import fitz  # pymupdf ≥1.24 同时导出 fitz / pymupdf 两个名字
+    except Exception as exc:
+        return {"ok": False, "parser": "pymupdf", "error": f"pymupdf 不可用: {exc}"}
+
+    pdf_path = req["pdf_path"]
+    pages_meta = req.get("pages_meta") or _pages_meta_from_pdf(pdf_path)
+    warnings: list[str] = []
+    pages: list[dict] = []
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception as exc:
+        return {"ok": False, "parser": "pymupdf", "error": f"打开 PDF 失败: {exc}"}
+
+    try:
+        for idx in range(len(pages_meta)):
+            meta = pages_meta[idx]
+            vb = meta.get("view_box") or [0, 0, 0, 0]
+            page_out = {"page": idx + 1, "status": "ok", "blocks": []}
+            if int(meta.get("rotation", 0) or 0) % 360 != 0:
+                page_out["status"] = "failed"
+                page_out["error"] = "旋转页不走 pymupdf 快路径（5.1.5 禁止猜旋转）"
+                pages.append(page_out)
+                continue
+            try:
+                data = doc[idx].get_text("dict")
+            except Exception as exc:
+                page_out["status"] = "failed"
+                page_out["error"] = str(exc)[:200]
+                pages.append(page_out)
+                continue
+
+            lines: list[dict] = []
+            for blk in data.get("blocks", []):
+                if blk.get("type") != 0:          # 0 = 文本块
+                    continue
+                for ln in blk.get("lines", []):
+                    spans = ln.get("spans", [])
+                    text = "".join(sp.get("text", "") for sp in spans).strip()
+                    boxes = [sp.get("bbox") for sp in spans if sp.get("bbox")]
+                    if not text or not boxes:
+                        continue
+                    x0 = min(b[0] for b in boxes)
+                    y0 = min(b[1] for b in boxes)
+                    x1 = max(b[2] for b in boxes)
+                    y1 = max(b[3] for b in boxes)
+                    size = max((float(sp.get("size") or 0.0)) for sp in spans) or 10.0
+                    lines.append({"text": text, "box": (x0, y0, x1, y1), "size": size})
+            if not lines:
+                page_out["status"] = "blank"
+                pages.append(page_out)
+                continue
+
+            sizes = sorted(l["size"] for l in lines)
+            body = sizes[len(sizes) // 2] or 10.0
+            top, bottom = float(vb[3]), float(vb[1])
+            for l in lines:
+                x0, y0, x1, y1 = l["box"]
+                # fitz 上左原点 → PDF 用户空间（y 轴翻转；仅 rotation=0，5.1.5 禁猜）
+                bbox = [x0, bottom + top - y1, x1, bottom + top - y0]
+                kind, level = _fitz_line_type(l["text"], l["size"], body)
+                page_out["blocks"].append({"type": kind, "level": level,
+                                           "text": l["text"], "bbox": bbox})
+            pages.append(page_out)
+    finally:
+        doc.close()
+
+    return {"ok": True, "parser": "pymupdf", "pages": pages, "warnings": warnings,
+            "coordinate": {
+                "source_space": "pdf_user_space",
+                "source_to_pdf": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                "derivation": "pymupdf 文本行 bbox 经 y 轴翻转换算到 PDF 用户空间（rotation=0）"}}
+
+
 def main() -> int:
     req = _read_request()
     mode = req.get("mode", "probe")
@@ -456,6 +548,7 @@ def main() -> int:
         "probe": probe,
         "marker": marker_extract,
         "docling": docling_extract,
+        "pymupdf": pymupdf_extract,
         "ocr_pages": ocr_pages,
         "pix2text": pix2text_recognize,
     }

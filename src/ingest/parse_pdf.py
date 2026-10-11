@@ -304,12 +304,22 @@ class DoclingAdapter(WorkerAdapter):
         super().__init__("docling", python=python)
 
 
+class PyMupdfAdapter(WorkerAdapter):
+    """PyMuPDF（fitz）：无 ToUnicode 的中文 PDF（预定义 CMap）抽取保真，
+    速度远快于 marker/docling——pypdf 对这类书抽出乱码时的首选。"""
+
+    def __init__(self, python: str | None = None):
+        super().__init__("pymupdf", python=python)
+
+
 def get_adapter(name: str, *, python: str | None = None) -> ParserAdapter:
     name = (name or "auto").lower()
     if name == "marker":
         return MarkerAdapter(python=python)
     if name == "docling":
         return DoclingAdapter(python=python)
+    if name in ("pymupdf", "mupdf"):
+        return PyMupdfAdapter(python=python)
     if name == "pypdf":
         return PypdfAdapter()
     if name == "auto":
@@ -342,6 +352,34 @@ def _has_text_layer(reader, sample: int = 3, min_chars: int = 80) -> bool:
     return total / max(1, len(idxs)) >= min_chars
 
 
+def _text_quality_ok(reader, sample: int = 3, min_ratio: float = 0.85) -> bool:
+    """抽取质量探测：常规字符（ASCII/CJK/希腊/数学/常用标点）占比达标才算可用。
+
+    中文 PDF 缺 ToUnicode 时 pypdf 会把汉字抽成孟加拉/格鲁吉亚等乱码块
+    （实测 FandolSong 字体的 LaTeX 书），文字层「有」但不可用——
+    这类书必须换保真抽取（pymupdf），否则锚点全是乱码。
+    """
+    n = len(reader.pages)
+    idxs = list(dict.fromkeys([0, n // 2, n - 1]))[:sample]
+    total = good = 0
+    for i in idxs:
+        try:
+            text = reader.pages[i].extract_text() or ""
+        except Exception:
+            continue
+        for ch in text:
+            o = ord(ch)
+            total += 1
+            if (ch.isascii()
+                    or 0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF   # CJK
+                    or 0x3000 <= o <= 0x303F or 0xFF00 <= o <= 0xFFEF   # 中文标点/全角
+                    or 0x370 <= o <= 0x3FF                               # 希腊
+                    or 0x2000 <= o <= 0x206F                             # 常用标点
+                    or 0x2070 <= o <= 0x209F or 0x2200 <= o <= 0x22FF):  # 上下标/数学
+                good += 1
+    return total > 0 and good / total >= min_ratio
+
+
 def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *,
               layout: Layout | None = None, doc_id: str | None = None,
               profile: str = "textbook", title: str | None = None,
@@ -364,10 +402,23 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
     parser_python = (config or {}).get("parser", {}).get("python")
     chosen = parser
     if parser == "auto" and _has_text_layer(reader):
-        # 快速路径：数字版 PDF 无需重型解析器（实测 285 页教材 marker 数小时 vs pypdf 秒级）
-        chosen = "pypdf"
-        print("[ingest] auto → pypdf：检测到文字层，走快速路径", file=sys.stderr)
-    adapter = get_adapter(chosen, python=parser_python)
+        if _text_quality_ok(reader):
+            # 快速路径：数字版 PDF 无需重型解析器（实测 285 页教材 marker 数小时 vs pypdf 秒级）
+            chosen = "pypdf"
+            print("[ingest] auto → pypdf：文字层质量良好，走快速路径", file=sys.stderr)
+        else:
+            # 有文字层但 pypdf 抽出乱码（中文 PDF 缺 ToUnicode，实测 FandolSong 字体）
+            # → PyMuPDF 保真抽取；不可用再退回重型链
+            chosen = "pymupdf"
+            print("[ingest] auto → pymupdf：文字层抽取质量差（疑似缺 ToUnicode），换保真抽取",
+                  file=sys.stderr)
+    if chosen in ("pymupdf", "mupdf"):
+        try:
+            adapter = get_adapter("pymupdf", python=parser_python)
+        except (InputError, PipelineError):
+            adapter = get_adapter("auto", python=parser_python)
+    else:
+        adapter = get_adapter(chosen, python=parser_python)
     if progress:
         progress({"stage": "ingest", "pages_done": 0, "pages_total": n_pages,
                   "parser": adapter.name})

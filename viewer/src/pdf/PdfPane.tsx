@@ -61,6 +61,12 @@ export default function PdfPane(): ReactElement {
       const task = pdfjs.getDocument({
         url: api.pdfUrl(docId),
         httpHeaders: { "X-Local-Token": token() },
+        // CJK CID 字体解码依赖预定义 CMap（缺了整页中文空白）；
+        // 非嵌入字体（CMR10 等）依赖标准字体数据（缺了根号等字形错位）
+        cMapUrl: "/cmaps/",
+        cMapPacked: true,
+        standardFontDataUrl: "/standard_fonts/",
+        useSystemFonts: true,
       });
       const doc = await task.promise;
       if (cancelled) {

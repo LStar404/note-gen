@@ -75,7 +75,7 @@ def get_settings(request: Request):
         "history": cfg.get("history", {}),
         "embedding": cfg.get("embedding", {}),
         "options": {
-            "parsers": ["auto", "marker", "docling", "pypdf"],
+            "parsers": ["auto", "marker", "docling", "pypdf", "pymupdf"],
             "ocr_modes": ["auto", "force", "off"],
             "languages": ["zh", "en", "ja"],
             "encodings": ["utf-8", "utf-8-sig", "gbk", "big5"],
@@ -96,7 +96,7 @@ def put_settings(request: Request, body: dict):
             cfg[section] = {**(cfg.get(section) or {}), **body[section]}
 
     parser = cfg.get("parser", {})
-    if parser.get("default") not in ("auto", "marker", "docling", "pypdf"):
+    if parser.get("default") not in ("auto", "marker", "docling", "pypdf", "pymupdf"):
         raise InputError(f"不支持的解析器: {parser.get('default')}")
     if parser.get("ocr_mode") not in ("auto", "force", "off"):
         raise InputError(f"不支持的 ocr_mode: {parser.get('ocr_mode')}")
