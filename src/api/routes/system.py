@@ -176,8 +176,14 @@ def trigger_export(request: Request, body: dict):
             register_artifact(Path(p).name, p)
         return {"paths": paths}
 
+    try:
+        from src.core.store import DocStore
+
+        _title = DocStore(st.layout, doc_id).manifest().get("title") or doc_id
+    except Exception:
+        _title = doc_id
     task = st.tasks.submit("export", run, {"doc_id": doc_id, "chapter_id": chapter_id, "format": fmt},
-                           doc_id=doc_id)
+                           doc_id=doc_id, name=_title + " · 导出 " + fmt)
     return JSONResponse({"task_id": task["task_id"]}, status_code=202)
 
 

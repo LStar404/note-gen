@@ -137,11 +137,11 @@ export default function Toolbar() {
     timersRef.current.add(timer);
   };
 
-  const track = (taskId: string, kind: string, params?: any) => {
+  const track = (taskId: string, kind: string, params?: any, name?: string) => {
     setTasks((list) => [
       ...list.filter((x) => x.task_id !== taskId),
-      { task_id: taskId, kind, status: "queued", progress: {}, params: params ?? null,
-        startedAt: Date.now(), bestPct: 0 },
+      { task_id: taskId, kind, name: name ?? null, status: "queued", progress: {},
+        params: params ?? null, startedAt: Date.now(), bestPct: 0 },
     ]);
     pollTask(taskId, kind);
   };
@@ -166,6 +166,7 @@ export default function Toolbar() {
           return {
             task_id: t.task_id,
             kind: t.kind,
+            name: t.name ?? old?.name ?? null,
             status: t.status,
             progress: t.progress ?? {},
             params: t.request ?? old?.params ?? null,
@@ -248,7 +249,12 @@ export default function Toolbar() {
     if (!docId) return;
     try {
       const { task_id } = await api.generate(docId, { chapter_id: chapterId });
-      track(task_id, "generate", { doc_id: docId, chapter_id: chapterId });
+      const st = useStore.getState();
+      const docTitle = st.docs.find((d) => d.doc_id === docId)?.title ?? docId;
+      const chTitle = (st.manifest?.chapters ?? []).find(
+        (c: any) => c.chapter_id === chapterId)?.title;
+      track(task_id, "generate", { doc_id: docId, chapter_id: chapterId },
+        docTitle + " · " + (chTitle ?? chapterId ?? "整本"));
       setToast("生成任务已启动：" + task_id);
     } catch (e: any) {
       setToast("生成失败：" + e.message);
@@ -470,7 +476,7 @@ export default function Toolbar() {
               title={t.error?.message ?? ""}
             >
               <span>
-                {t.kind} · {statusLabel(t)}
+                {t.name || t.kind} · {statusLabel(t)}
                 {["queued", "running"].includes(t.status) && t.startedAt
                   ? " · 已运行 " + fmtElapsed(Date.now() - t.startedAt)
                   : ""}

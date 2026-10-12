@@ -56,6 +56,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_log(provider_id, model, ts);
 CREATE TABLE IF NOT EXISTS tasks (
   task_id TEXT PRIMARY KEY,
   kind TEXT NOT NULL, doc_id TEXT, status TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
   request_json TEXT NOT NULL, progress_json TEXT NOT NULL DEFAULT '{}',
   result_json TEXT, error_json TEXT,
   idempotency_key TEXT UNIQUE,
@@ -90,13 +91,18 @@ class RuntimeDB:
         self._conn.row_factory = sqlite3.Row
         with self._conn:
             self._conn.executescript(_SCHEMA)
+            # 旧库迁移：任务显示名（生成任务要知道在生成什么）
+            try:
+                self._conn.execute("ALTER TABLE tasks ADD COLUMN name TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass      # 列已存在
 
     def close(self) -> None:
         self._conn.close()
 
     # ---- 任务 ----
     def create_task(self, task_id: str, kind: str, request: dict, *, doc_id: str | None = None,
-                    idempotency_key: str | None = None) -> dict:
+                    idempotency_key: str | None = None, name: str = "") -> dict:
         now = utc_now_iso()
         with self._lock, self._conn:
             if idempotency_key:
@@ -105,9 +111,10 @@ class RuntimeDB:
                 if row:
                     return dict(row)
             self._conn.execute(
-                "INSERT INTO tasks(task_id,kind,doc_id,status,request_json,progress_json,"
-                "idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (task_id, kind, doc_id, "queued", json.dumps(request, ensure_ascii=False), "{}",
+                "INSERT INTO tasks(task_id,kind,doc_id,status,name,request_json,progress_json,"
+                "idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (task_id, kind, doc_id, "queued", name or "",
+                 json.dumps(request, ensure_ascii=False), "{}",
                  idempotency_key, now, now))
         return self.get_task(task_id)
 

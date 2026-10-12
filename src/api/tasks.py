@@ -22,10 +22,11 @@ class TaskManager:
         return self.runtime.interrupt_running()
 
     def submit(self, kind: str, fn: Callable[..., dict], request: dict, *,
-               doc_id: str | None = None, idempotency_key: str | None = None) -> dict:
+               doc_id: str | None = None, idempotency_key: str | None = None,
+               name: str = "") -> dict:
         task_id = "task_" + uuid.uuid4().hex[:12]
         task = self.runtime.create_task(task_id, kind, request, doc_id=doc_id,
-                                        idempotency_key=idempotency_key)
+                                        idempotency_key=idempotency_key, name=name)
         if task.get("status") != "queued" or task.get("result") is not None:
             return task
         thread = threading.Thread(target=self._run, args=(task_id, fn, request), daemon=True)

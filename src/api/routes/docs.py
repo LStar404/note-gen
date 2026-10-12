@@ -504,6 +504,14 @@ def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
         if t.get("kind") == "generate" and t.get("status") in ("queued", "running"):
             return JSONResponse({"task_id": t["task_id"]}, status_code=202)
 
+    # 任务显示名：书名 · 章节名（任务栏一眼看出在生成什么）
+    try:
+        _man = DocStore(st.layout, doc_id).manifest()
+        _title = _man.get("title") or doc_id
+        _ch = next((c for c in _man.get("chapters", []) if c.get("chapter_id") == chapter_id), None)
+        task_name = _title + " · " + ((_ch or {}).get("title") or chapter_id or "整本")
+    except Exception:
+        task_name = doc_id + (" · " + chapter_id if chapter_id else "")
     task = st.tasks.submit("generate", run, {"doc_id": doc_id, "chapter_id": chapter_id},
-                           doc_id=doc_id, idempotency_key=None)
+                           doc_id=doc_id, idempotency_key=None, name=task_name)
     return JSONResponse({"task_id": task["task_id"]}, status_code=202)

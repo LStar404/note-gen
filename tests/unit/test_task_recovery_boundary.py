@@ -38,7 +38,8 @@ def test_list_tasks_endpoint_returns_persisted_records_with_params(workspace):
     """任务列表（供「继续生成」续跑）：记录与 request 参数必须持久可取。"""
     rt = RuntimeDB(workspace.runtime_db)
     t1 = rt.create_task("task_resume00001", "generate",
-                        {"doc_id": "d1", "chapter_id": "ch01"}, doc_id="d1")
+                        {"doc_id": "d1", "chapter_id": "ch01"}, doc_id="d1",
+                        name="样书 · 第 1 章")
     rt.update_task(t1["task_id"], status="cancelled")
     rt.create_task("task_resume00002", "generate",
                    {"doc_id": "d1", "chapter_id": None}, doc_id="d1")
@@ -52,6 +53,7 @@ def test_list_tasks_endpoint_returns_persisted_records_with_params(workspace):
         assert "task_resume00001" in by_id and "task_resume00002" in by_id
         assert by_id["task_resume00001"]["request"] == {"doc_id": "d1", "chapter_id": "ch01"}, \
             "续跑参数必须原样可取"
+        assert by_id["task_resume00001"]["name"] == "样书 · 第 1 章", "任务显示名必须持久可取"
         assert by_id["task_resume00001"]["status"] == "cancelled"
         resp2 = client.get("/api/v1/tasks", headers=headers)
         assert resp2.status_code == 200, "无 doc_id 过滤也应可用"
