@@ -4,6 +4,8 @@ import { create } from "zustand";
 import { api, type DocSummary, type NoteBlock, type Anchor } from "../api/client";
 
 const anchorCache = new Map<string, Anchor>();
+// 在途请求合并：几十张卡片同时挂载时，同一锚点会被重复拉取（无 pending 表时是请求风暴）
+const anchorPending = new Map<string, Promise<void>>();
 
 export interface AgentState {
   plan: any | null;
@@ -76,17 +78,29 @@ export const useStore = create<Store>((set, get) => ({
   anchors: {},
 
   fetchAnchors: async (ids) => {
-    const missing = ids.filter((id) => id && !anchorCache.has(id));
+    const wanted = ids.filter((id) => id && !anchorCache.has(id));
+    if (!wanted.length) return;
     await Promise.all(
-      missing.map(async (id) => {
-        try {
-          anchorCache.set(id, await api.getAnchor(id));
-        } catch {
-          /* 锚点缺失时徽标显示占位 */
+      wanted.map((id) => {
+        let p = anchorPending.get(id);
+        if (!p) {
+          p = api
+            .getAnchor(id)
+            .then((a) => {
+              anchorCache.set(id, a);
+            })
+            .catch(() => {
+              /* 锚点缺失时徽标显示占位 */
+            })
+            .finally(() => {
+              anchorPending.delete(id);
+            });
+          anchorPending.set(id, p);
         }
+        return p;
       })
     );
-    if (missing.length) set({ anchors: Object.fromEntries(anchorCache) });
+    set({ anchors: Object.fromEntries(anchorCache) });
   },
   loadDocs: async () => {
     const { docs } = await api.listDocs();

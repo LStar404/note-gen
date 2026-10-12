@@ -74,8 +74,13 @@ def _formula_score(block: dict | None, case: dict, label: dict | None) -> float:
     return 1.0 if want in segments or any(want in seg for seg in segments) else 0.0
 
 
-def score_case(store: DocStore, case: dict, label: dict | None) -> dict[str, float]:
-    block = _block_matches(store, case)
+_UNSET: Any = object()   # 区分「未传入」与「未命中」：None=未命中不得触发重搜
+
+
+def score_case(store: DocStore, case: dict, label: dict | None,
+               block: dict | None | object = _UNSET) -> dict[str, float]:
+    if block is _UNSET:
+        block = _block_matches(store, case)
     if label and "coverage" in label:
         coverage = float(label["coverage"])
     else:
@@ -113,9 +118,10 @@ def run_eval(layout: Layout, doc_id: str, *, cases_path: Path,
     buckets: dict[str, list[float]] = {d: [] for d in DIMENSIONS}
     for case in cases:
         label = labels.get(case.get("case_id", ""))
-        scores = score_case(store, case, label)
+        block = _block_matches(store, case)      # 每用例只匹配一次（曾重复两次）
+        scores = score_case(store, case, label, block=block)
         per_case.append({"case_id": case.get("case_id"), "dimension": case.get("dimension"),
-                         "block_matched": _block_matches(store, case) is not None,
+                         "block_matched": block is not None,
                          "scores": scores, "human_labelled": bool(label)})
         for dim in DIMENSIONS:
             buckets[dim].append(scores[dim])
