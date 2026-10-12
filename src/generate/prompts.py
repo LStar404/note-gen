@@ -4,7 +4,20 @@ from __future__ import annotations
 
 from src.core.block_types import type_enum
 
-PROMPT_VERSION = "1.2.0"   # 1.2.0: 填充篇幅约束（输出 tokens 是生成时长大头，注水直接变慢）
+PROMPT_VERSION = "1.3.0"   # 1.3.0: 静态前缀前置（吃 DeepSeek 前缀缓存）+ 输入/输出双向瘦身
+
+import json as _json
+
+
+def compact_schema(schema: dict) -> str:
+    """提示词里的 schema 精简版：去附加键 + 紧凑序列化（省输入 token）。"""
+    def _strip(o):
+        if isinstance(o, dict):
+            return {k: _strip(v) for k, v in o.items() if k != "additionalProperties"}
+        if isinstance(o, list):
+            return [_strip(v) for v in o]
+        return o
+    return _json.dumps(_strip(schema), ensure_ascii=False, separators=(",", ":"))
 
 SYSTEM_PROMPT = """你是教材笔记生成助手。你的任务是把教材原文整理成结构化笔记块。
 硬性规则：
@@ -15,8 +28,7 @@ SYSTEM_PROMPT = """你是教材笔记生成助手。你的任务是把教材原�
 3. 数学公式一律输出 LaTeX（行内 $…$，独立公式 $$…$$）。
 4. 只输出 JSON，不得输出其他任何文字。"""
 
-OUTLINE_PROMPT = """下面是{doc_kind}《{book_title}》{chapter_part}的锚点摘要（每行一个锚点：
-id|类型|文本开头）。请生成该章的笔记块提纲 JSON，规则：
+OUTLINE_PROMPT = """请生成教材章节的笔记块提纲 JSON，规则：
 - 体量控制：本章共 {n_anchors} 条锚点。{size_note}
 - 覆盖本章全部定义（definition）与定理（theorem），不得遗漏；
 - 为关键概念各配 motivation（最多 {n_motivation} 个）；
@@ -24,41 +36,43 @@ id|类型|文本开头）。请生成该章的笔记块提纲 JSON，规则：
 - 每块 sources 只能从给定锚点 id 中选择；
 - 每块给出章内唯一 temp_id；depends_on 只引用本章 temp_id，无自环/循环；
 - 不为没有定义/定理的章节强造该类型，原文未给证明时不得补造；
-- 给出建议 order（按阅读序，motivation 放在对应概念之前）。
+- 给出建议 order（按阅读序，motivation 放在对应概念之前）；
+- quote 用 ≤80 字的原文片段即可（仅作提示，最终引文由填充阶段逐字精修）。
+输出 JSON Schema：{outline_schema}
 <source_data>
+本章资料：{doc_kind}《{book_title}》{chapter_part}
+锚点摘要（每行一个锚点：id|类型|文本开头）：
 {anchor_summaries}
-</source_data>
-输出 JSON Schema：{outline_schema}"""
+</source_data>"""
 
-FILL_MANY_PROMPT = """下面是 {n} 个笔记块的定义及各自来源原文（按编号分组）。
-请为每个块生成内容（md/LaTeX），要求：
+FILL_MANY_PROMPT = """请为给定的多个笔记块分别生成内容（md/LaTeX），要求：
 - 每个块独立成条放入 fills 数组，temp_id 必须与给定块一致，不得增删块；
 - definition/theorem：严格复述原文语义，公式用 LaTeX，可补充等价表述但不得改变含义；
 - motivation：说明引入动机与直觉，可综合归纳（此时 sources 置空、basis=synthesis）；
-- figure：输出图片占位符 ![fig_xxxxxxxx]、图注与解读文字；
+- figure：输出图片占位符（按资料给出的占位）、图注与解读文字；
 - 返回完整 sources_patch 与 basis；未修改时返回原值，不能省略；修正只用该块实际提供的锚点 id；
 - sources_patch 的 quote 必须**逐字照抄**该块锚点原文中的连续片段（≤300 字）：禁止改写、翻译、加省略号/补标点/合并片段，只截取不改字；
 - 篇幅克制（直接决定生成速度，禁止注水）：definition/theorem 正文 150-400 字；motivation/figure/link ≤150 字。
   只写块内容本身，不写背景铺垫、历史评价、教学意义、章节预告；不得复述本块标题；
+输出 JSON Schema：{fill_many_schema}
 <source_data>
 {blocks_fulltexts}
-</source_data>
-输出 JSON Schema：{fill_many_schema}"""
+</source_data>"""
 
-FILL_PROMPT = """下面是笔记块 {block_type}「{title}」的定义及其来源原文。
-请生成该块的内容（md/LaTeX），要求：
+FILL_PROMPT = """请生成笔记块的内容（md/LaTeX），要求：
 - definition/theorem：严格复述原文语义，公式用 LaTeX，可补充等价表述但不得改变含义；
 - motivation：说明引入动机与直觉，可综合归纳（此时 sources 置空、basis=synthesis）；
-- figure：输出图片占位符 ![{fig_id}]、图注与解读文字；
+- figure：输出图片占位符（按资料给出的占位）、图注与解读文字；
 - 返回完整 sources_patch 与 basis；未修改时返回原值，不能省略；修正只用本次实际提供的锚点 id；
 - sources_patch 的 quote 必须**逐字照抄**锚点原文中的连续片段（≤300 字）：禁止改写、翻译、加省略号/补标点/合并片段，只截取不改字；
 - 篇幅克制（直接决定生成速度，禁止注水）：definition/theorem 正文 150-400 字；motivation/figure/link ≤150 字。
   只写块内容本身，不写背景铺垫、历史评价、教学意义、章节预告；不得复述本块标题；
+输出 JSON Schema：{fill_schema}
 <source_data>
 {block_spec_json}
 {source_fulltexts}
-</source_data>
-输出 JSON Schema：{fill_schema}"""
+图片占位：![{fig_id}]
+</source_data>"""
 
 AGENT_SYSTEM_PROMPT = SYSTEM_PROMPT + """
 

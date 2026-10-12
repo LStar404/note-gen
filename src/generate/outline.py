@@ -15,7 +15,7 @@ from src.core.errors import (LLMError, PriceUnknown, QuotaExhausted, RetryableEr
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
-from .prompts import (OUTLINE_PROMPT, SYSTEM_PROMPT, anchor_summary_line,
+from .prompts import (OUTLINE_PROMPT, SYSTEM_PROMPT, anchor_summary_line, compact_schema,
                       build_outline_schema, language_instruction)
 from .validate_retry import parse_json_output, validate_outline_payload
 
@@ -155,7 +155,7 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
             n_anchors=len(anchors),
             size_note=size_note,
             anchor_summaries="\n".join(anchor_summary_line(a) for a in batch),
-            outline_schema=json.dumps(schema, ensure_ascii=False),
+            outline_schema=compact_schema(schema),
         ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
         messages = [{"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt}]

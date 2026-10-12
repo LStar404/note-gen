@@ -12,7 +12,7 @@ from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
 from .prompts import (FILL_MANY_PROMPT, FILL_PROMPT, SYSTEM_PROMPT, build_fill_many_schema,
-                      build_fill_schema, language_instruction)
+                      build_fill_schema, compact_schema, language_instruction)
 from .validate_retry import check_latex, parse_json_output, validate_fill_payload
 
 
@@ -38,13 +38,12 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
     profile = config.get("_profile", "textbook")
     schema = build_fill_schema(profile)
     source_ids = [s["anchor_id"] for s in spec.get("sources", []) if s.get("anchor_id") in anchors_by_id]
-    fulltexts = "\n\n".join(f"[{aid}] {anchors_by_id[aid].get('content', '')[:1200]}" for aid in source_ids)
+    fulltexts = "\n\n".join(f"[{aid}] {anchors_by_id[aid].get('content', '')[:800]}" for aid in source_ids)
     adj = _adjacent_anchors(anchors, source_ids)
     if adj:
         fulltexts += "\n\n相邻锚点（仅供理解语境，不得作为来源）：\n" + "\n".join(
-            f"[{a['anchor_id']}] {a.get('content', '')[:120]}" for a in adj)
-    if related_titles:
-        fulltexts += "\n\n相关已生成块标题：" + "；".join(related_titles[:4])
+            f"[{a['anchor_id']}] {a.get('content', '')[:80]}" for a in adj)
+    # 相关块标题不再注入（省 token；依赖语境已由批内 depends_on 标题携带）
 
     # 图占位符 id 必须用真实 figure_id（原实现误取 anchor_id，模型照抄后全是破图）
     fig_id = next((s.get("figure_id") for s in spec.get("sources", []) if s.get("figure_id")),
@@ -57,7 +56,7 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
                                     ("temp_id", "type", "title", "basis", "sources", "depends_on")},
                                    ensure_ascii=False),
         source_fulltexts=fulltexts,
-        fill_schema=json.dumps(schema, ensure_ascii=False),
+        fill_schema=compact_schema(schema),
     ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
     max_in = int(config.get("generate", {}).get("fill_max_in", 8000))
@@ -72,7 +71,7 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
                                         ("temp_id", "type", "title", "basis", "sources", "depends_on")},
                                        ensure_ascii=False),
             source_fulltexts=shorter,
-            fill_schema=json.dumps(schema, ensure_ascii=False),
+            fill_schema=compact_schema(schema),
         ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
 
@@ -184,7 +183,7 @@ def fill_many(client: LLMClient, *, doc_id: str, chapter_id: str, specs: list[di
     prompt = FILL_MANY_PROMPT.format(
         n=len(specs),
         blocks_fulltexts="\n\n".join(parts),
-        fill_many_schema=json.dumps(schema, ensure_ascii=False),
+        fill_many_schema=compact_schema(schema),
     ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
     max_out = int(config.get("generate", {}).get("fill_max_out", 6000))
