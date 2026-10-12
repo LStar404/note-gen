@@ -27,6 +27,15 @@ def test_reasoning_effort_omitted_when_unset():
     assert provider.calls[0]["reasoning_effort"] is None
 
 
+
+
+def test_thinking_normalized():
+    """thinking 拼错不得静默放行（否则悄悄回到昂贵的思考默认）。"""
+    assert normalize_settings({"generate": {"thinking": "DISABLED"}})["generate"]["thinking"] == "disabled"
+    assert normalize_settings({"generate": {"thinking": "bogus"}})["generate"]["thinking"] is None
+    assert normalize_settings({"generate": {}})["generate"]["thinking"] is None
+
+
 def test_reasoning_effort_normalized():
     assert normalize_settings({"generate": {"reasoning_effort": "HIGH"}})["generate"]["reasoning_effort"] == "high"
     assert normalize_settings({"generate": {"reasoning_effort": "bogus"}})["generate"]["reasoning_effort"] is None

@@ -30,6 +30,11 @@ DEFAULTS: dict[str, Any] = {
         "concurrency": 2,
         "timeout": 600,          # LLM 单次调用超时秒数（推理型模型需更长）
         "reasoning_effort": None,  # 推理深度 low/medium/high（空=供应商默认；low 显著提速）
+        "thinking": None,          # 思考开关 disabled/enabled（deepseek-flash 实测 disabled 提速 5 倍）
+        "fill_batch": 1,           # 小块合批：N 块一次填充调用（1=逐块）
+        "outline_batch_out": 8000, # 提纲分批目标（预计输出 token/批）
+        "chapter_concurrency": 2,  # 整本生成并行章数
+        "max_concurrent_requests": 8,  # 全局在途 LLM 请求上限
         "max_cost_per_chapter": 0.0,
         "temperature": 0.2,
         "output_language": "zh",      # zh | en | ja  生成笔记与导出标签语言
@@ -45,6 +50,7 @@ DEFAULTS: dict[str, Any] = {
 ENCODINGS = ("utf-8", "utf-8-sig", "gbk", "big5")
 OUTPUT_LANGUAGES = ("zh", "en", "ja")
 REASONING_EFFORTS = ("low", "medium", "high")
+THINKING_MODES = ("disabled", "enabled")
 
 
 def normalize_settings(cfg: dict) -> dict:
@@ -56,6 +62,9 @@ def normalize_settings(cfg: dict) -> dict:
     # 推理深度：仅接受 low/medium/high，空值=供应商默认（不限制思考长度）
     effort = ((cfg.get("generate") or {}).get("reasoning_effort") or "").lower() or None
     cfg["generate"]["reasoning_effort"] = effort if effort in REASONING_EFFORTS else None
+    # 思考开关：拼错的值不得静默放行（否则悄悄回到昂贵的思考默认）
+    think = ((cfg.get("generate") or {}).get("thinking") or "").lower() or None
+    cfg["generate"]["thinking"] = think if think in THINKING_MODES else None
     return cfg
 
 
