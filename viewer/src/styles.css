@@ -845,6 +845,20 @@ html[data-motion="off"] *::after {
   background-size: cover; background-position: center;
 }
 
+/* ---------------- 卡片放大按钮 ---------------- */
+.block-zoom-btn {
+  margin-left: auto; flex: none;
+  padding: 2px 8px; font-size: 13px; line-height: 1.6;
+  border-radius: 8px; border: 1px solid transparent;
+  background: transparent; color: var(--muted);
+  opacity: .55; transition: all .18s ease;
+}
+.block-card:hover .block-zoom-btn { opacity: 1; }
+.block-zoom-btn:hover {
+  color: var(--accent); border-color: var(--accent);
+  background: var(--accent-soft); transform: scale(1.12);
+}
+
 /* ---------------- 笔记放大浮层 ---------------- */
 .note-zoom-mask {
   position: fixed; inset: 0; z-index: 60;

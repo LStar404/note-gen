@@ -51,19 +51,24 @@ export default function BlockCard({ block, selected, onSelect }: {
   };
 
   return (
-    <div
-      className={`block-card ${selected ? "selected" : ""}`}
-      onClick={() => {
-        onSelect(block.id);
-        openZoom(block.id);   // 点击即放大阅读（小卡片太碎，见 NoteZoom）
-      }}
-    >
+    <div className={`block-card ${selected ? "selected" : ""}`} onClick={() => onSelect(block.id)}>
       <div className="block-head">
         <span className="block-type">{TYPE_ICON[block.type] ?? "📝"}</span>
         <span className="block-title">{block.title}</span>
         <span className={`badge status-${block.status}`}>{STATUS_CN[block.status] ?? block.status}</span>
         {block.generation_protected && <span className="badge protected">已保护</span>}
         {block.basis === "synthesis" && <span className="badge synthesis">AI 归纳</span>}
+        <button
+          className="block-zoom-btn"
+          title="放大阅读"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect(block.id);
+            openZoom(block.id);
+          }}
+        >
+          ⤢
+        </button>
       </div>
       {/* 卡片正文走与「预览」同一渲染器（markdown + KaTeX），不再显示裸文本 */}
       <div
