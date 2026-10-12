@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.core.errors import QuotaExhausted, RetryableError
+from src.core.errors import QuotaExhausted
 from src.core.llm import DummyProvider, LLMClient
 from src.core.model_registry import ModelRegistry
 from src.core.paths import Layout
