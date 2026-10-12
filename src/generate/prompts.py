@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from src.core.block_types import type_enum
 
-PROMPT_VERSION = "1.0.1"   # 1.0.1: FILL_PROMPT 增加 quote 逐字照抄约束（缓存随之失效）
+PROMPT_VERSION = "1.1.0"   # 1.1.0: OUTLINE_PROMPT 增加章体量自适应；新增 FILL_MANY_PROMPT 批量填充
 
 SYSTEM_PROMPT = """你是教材笔记生成助手。你的任务是把教材原文整理成结构化笔记块。
 硬性规则：
@@ -17,6 +17,7 @@ SYSTEM_PROMPT = """你是教材笔记生成助手。你的任务是把教材原�
 
 OUTLINE_PROMPT = """下面是{doc_kind}《{book_title}》{chapter_part}的锚点摘要（每行一个锚点：
 id|类型|文本开头）。请生成该章的笔记块提纲 JSON，规则：
+- 体量控制：本章共 {n_anchors} 条锚点。{size_note}
 - 覆盖本章全部定义（definition）与定理（theorem），不得遗漏；
 - 为关键概念各配 motivation（最多 {n_motivation} 个）；
 - 对含图锚点生成 figure 块；
@@ -28,6 +29,20 @@ id|类型|文本开头）。请生成该章的笔记块提纲 JSON，规则：
 {anchor_summaries}
 </source_data>
 输出 JSON Schema：{outline_schema}"""
+
+FILL_MANY_PROMPT = """下面是 {n} 个笔记块的定义及各自来源原文（按编号分组）。
+请为每个块生成内容（md/LaTeX），要求：
+- 每个块独立成条放入 fills 数组，temp_id 必须与给定块一致，不得增删块；
+- definition/theorem：严格复述原文语义，公式用 LaTeX，可补充等价表述但不得改变含义；
+- motivation：说明引入动机与直觉，可综合归纳（此时 sources 置空、basis=synthesis）；
+- figure：输出图片占位符 ![fig_xxxxxxxx]、图注与解读文字；
+- 返回完整 sources_patch 与 basis；未修改时返回原值，不能省略；修正只用该块实际提供的锚点 id；
+- sources_patch 的 quote 必须**逐字照抄**该块锚点原文中的连续片段（≤300 字）：禁止改写、翻译、加省略号/补标点/合并片段，只截取不改字；
+- 篇幅与块体量相称：短块（图注/链接/动机）数句即可，不得注水；
+<source_data>
+{blocks_fulltexts}
+</source_data>
+输出 JSON Schema：{fill_many_schema}"""
 
 FILL_PROMPT = """下面是笔记块 {block_type}「{title}」的定义及其来源原文。
 请生成该块的内容（md/LaTeX），要求：
@@ -126,6 +141,16 @@ def build_fill_schema(profile: str = "textbook") -> dict:
             },
             "basis": {"enum": ["anchored", "synthesis"]},
         },
+        "additionalProperties": False,
+    }
+
+
+def build_fill_many_schema(profile: str = "textbook") -> dict:
+    """批量填充 schema：一次调用回 fills 数组（每项与单块 schema 一致）。"""
+    return {
+        "type": "object",
+        "properties": {"fills": {"type": "array", "items": build_fill_schema(profile)}},
+        "required": ["fills"],
         "additionalProperties": False,
     }
 

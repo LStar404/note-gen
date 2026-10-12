@@ -11,7 +11,8 @@ from src.core.errors import (LLMError, PriceUnknown, QuotaExhausted, RetryableEr
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
-from .prompts import FILL_PROMPT, SYSTEM_PROMPT, build_fill_schema, language_instruction
+from .prompts import (FILL_MANY_PROMPT, FILL_PROMPT, SYSTEM_PROMPT, build_fill_many_schema,
+                      build_fill_schema, language_instruction)
 from .validate_retry import check_latex, parse_json_output, validate_fill_payload
 
 
@@ -37,13 +38,13 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
     profile = config.get("_profile", "textbook")
     schema = build_fill_schema(profile)
     source_ids = [s["anchor_id"] for s in spec.get("sources", []) if s.get("anchor_id") in anchors_by_id]
-    fulltexts = "\n\n".join(f"[{aid}] {anchors_by_id[aid].get('content', '')[:2000]}" for aid in source_ids)
+    fulltexts = "\n\n".join(f"[{aid}] {anchors_by_id[aid].get('content', '')[:1200]}" for aid in source_ids)
     adj = _adjacent_anchors(anchors, source_ids)
     if adj:
         fulltexts += "\n\n相邻锚点（仅供理解语境，不得作为来源）：\n" + "\n".join(
-            f"[{a['anchor_id']}] {a.get('content', '')[:200]}" for a in adj)
+            f"[{a['anchor_id']}] {a.get('content', '')[:120]}" for a in adj)
     if related_titles:
-        fulltexts += "\n\n相关已生成块标题：" + "；".join(related_titles[:8])
+        fulltexts += "\n\n相关已生成块标题：" + "；".join(related_titles[:4])
 
     # 图占位符 id 必须用真实 figure_id（原实现误取 anchor_id，模型照抄后全是破图）
     fig_id = next((s.get("figure_id") for s in spec.get("sources", []) if s.get("figure_id")),
@@ -62,7 +63,7 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
     max_in = int(config.get("generate", {}).get("fill_max_in", 8000))
     if estimate_tokens(prompt) > max_in:
         # 超预算：先裁剪来源原文（保留锚点 id 与结构），仍超限再裁剪相邻上下文（5.3.2）
-        shorter = "\n\n".join(f"[{aid}] {anchors_by_id[aid].get('content', '')[:800]}" for aid in source_ids)
+        shorter = "\n\n".join(f"[{aid}] {anchors_by_id[aid].get('content', '')[:600]}" for aid in source_ids)
         prompt = FILL_PROMPT.format(
             block_type=spec.get("type", "definition"),
             title=spec.get("title", ""),
@@ -144,6 +145,105 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
             "sources_patch": spec.get("sources", []), "basis": spec.get("basis", "anchored")}
 
 
+
+
+def _failed_result(spec: dict, errors: list[str]) -> dict:
+    return {"_temp_id": spec["temp_id"], "_status": "failed", "_errors": errors,
+            "content": "", "content_format": "md_latex", "tags": [],
+            "sources_patch": spec.get("sources", []), "basis": spec.get("basis", "anchored")}
+
+
+def fill_many(client: LLMClient, *, doc_id: str, chapter_id: str, specs: list[dict],
+              anchors_by_id: dict[str, dict], anchors: list[dict], model: str | None,
+              config: dict, by_id: dict[str, dict], budget: BudgetGuard | None = None,
+              task_id: str | None = None) -> dict[str, dict]:
+    """一次调用填充多个块（小块合批提速，调用数降为 1/N）。
+
+    批量输出整体非法或个别块校验失败时，回退 fill_one 逐块填充兜底——
+    合批只提吞吐，不牺牲单块质量。配额/调用层错误同样按块隔离返回失败结果。
+    """
+    profile = config.get("_profile", "textbook")
+    schema = build_fill_many_schema(profile)
+    parts: list[str] = []
+    for i, spec in enumerate(specs):
+        source_ids = [s["anchor_id"] for s in spec.get("sources", [])
+                      if s.get("anchor_id") in anchors_by_id]
+        fulltexts = "\n\n".join(
+            f"[{aid}] {anchors_by_id[aid].get('content', '')[:1200]}" for aid in source_ids)
+        fig_id = next((s.get("figure_id") for s in spec.get("sources", [])
+                       if s.get("figure_id")), "fig_00000000")
+        related = [by_id[d]["title"] for d in spec.get("depends_on", []) if d in by_id]
+        parts.append(
+            f"【块{i + 1}】temp_id={spec.get('temp_id')}　图片占位 ![{fig_id}]"
+            + (f"　依赖块标题：{'；'.join(related[:4])}" if related else "")
+            + "\n块定义："
+            + json.dumps({k: spec.get(k) for k in
+                          ("temp_id", "type", "title", "basis", "sources", "depends_on")},
+                         ensure_ascii=False)
+            + "\n来源原文：\n" + (fulltexts or "（无：basis=synthesis）"))
+    prompt = FILL_MANY_PROMPT.format(
+        n=len(specs),
+        blocks_fulltexts="\n\n".join(parts),
+        fill_many_schema=json.dumps(schema, ensure_ascii=False),
+    ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+    max_out = int(config.get("generate", {}).get("fill_max_out", 6000))
+    try:
+        resp = client.complete("fill", messages, schema=schema,
+                               max_tokens=max_out * min(3, len(specs)),
+                               temperature=config.get("generate", {}).get("temperature"),
+                               model=model, doc_id=doc_id, chapter_id=chapter_id,
+                               task_id=task_id, budget=budget)
+    except TaskCancelled:
+        raise
+    except QuotaExhausted as exc:
+        return {s["temp_id"]: _failed_result(s, [str(exc.message)]) for s in specs}
+    except (LLMError, RetryableError) as exc:
+        return {s["temp_id"]: _failed_result(s, [f"LLM 调用失败: {exc.message}"]) for s in specs}
+    except PriceUnknown as exc:
+        if exc.code != "BUDGET_EXCEEDED":
+            raise
+        return {s["temp_id"]: _failed_result(s, [exc.message]) for s in specs}
+
+    out: dict[str, dict] = {}
+    need_single: list[dict] = []
+    try:
+        payload = parse_json_output(resp.get("output") if resp.get("output") is not None
+                                    else resp.get("raw_text", ""))
+        fills = payload.get("fills") if isinstance(payload, dict) else None
+        if not isinstance(fills, list):
+            raise SchemaViolation("fills 不是数组")
+        for spec in specs:
+            item = next((f for f in fills
+                         if isinstance(f, dict) and f.get("temp_id") == spec["temp_id"]), None)
+            if item is None:
+                need_single.append(spec)
+                continue
+            try:
+                source_ids = [s["anchor_id"] for s in spec.get("sources", [])
+                              if s.get("anchor_id") in anchors_by_id]
+                validate_fill_payload(item, allowed_anchor_ids=set(source_ids),
+                                      anchors_by_id=anchors_by_id, spec=spec)
+            except SchemaViolation:
+                need_single.append(spec)
+                continue
+            ok, latex_warnings = check_latex(item.get("content", ""))
+            item.setdefault("_warnings", []).extend(latex_warnings)
+            item["_status"] = "ok" if ok else "needs_review"
+            item["_temp_id"] = spec["temp_id"]
+            out[spec["temp_id"]] = item
+    except SchemaViolation:
+        need_single = list(specs)
+    # 未通过的块逐块兜底（fill_one 自带修复重试）
+    for spec in need_single:
+        out[spec["temp_id"]] = fill_one(
+            client, doc_id=doc_id, chapter_id=chapter_id, spec=spec,
+            anchors_by_id=anchors_by_id, anchors=anchors, model=model, config=config,
+            related_titles=[by_id[d]["title"] for d in spec.get("depends_on", []) if d in by_id],
+            budget=budget, task_id=task_id)
+    return out
+
+
 def fill_all(client: LLMClient, *, doc_id: str, chapter_id: str, outline_items: list[dict],
              anchors_by_id: dict[str, dict], anchors: list[dict], model: str | None,
              config: dict, concurrency: int = 2, budget: BudgetGuard | None = None,
@@ -168,29 +268,54 @@ def fill_all(client: LLMClient, *, doc_id: str, chapter_id: str, outline_items: 
                         anchors_by_id=anchors_by_id, anchors=anchors, model=model,
                         config=config, related_titles=related, budget=budget, task_id=task_id)
 
+    def run_many(specs: list[dict]) -> dict[str, dict]:
+        if is_cancelled and is_cancelled():
+            raise TaskCancelled("任务已取消")
+        return fill_many(client, doc_id=doc_id, chapter_id=chapter_id, specs=specs,
+                         anchors_by_id=anchors_by_id, anchors=anchors, model=model,
+                         config=config, by_id=by_id, budget=budget, task_id=task_id)
+
     pending: dict[str, dict] = {i["temp_id"]: dict(i) for i in outline_items}
     known = set(pending)
     # 失效依赖（指向不存在的 temp_id）不构成等待条件，否则永远等不到就绪
     deps = {tid: set(i.get("depends_on", [])) & known for tid, i in pending.items()}
     done_ids: set[str] = set()
     futures: dict = {}
+    # 小块合批（generate.fill_batch，默认 1 = 逐块；>1 时 N 块一次调用，填充调用数降为 1/N）
+    fill_batch = max(1, int(config.get("generate", {}).get("fill_batch", 1) or 1))
 
     with ThreadPoolExecutor(max_workers=max(1, int(concurrency))) as pool:
+        def _submit(tids: list[str]) -> None:
+            specs = [pending.pop(t) for t in tids]
+            if len(specs) == 1:
+                futures[pool.submit(run, specs[0])] = tids
+            else:
+                futures[pool.submit(run_many, specs)] = tids
+
         def submit_ready() -> None:
+            chunk: list[str] = []
             for tid in [t for t in list(pending) if deps[t] <= done_ids]:
-                futures[pool.submit(run, pending.pop(tid))] = tid
+                chunk.append(tid)
+                if len(chunk) >= fill_batch:
+                    _submit(chunk)
+                    chunk = []
+            if chunk:
+                _submit(chunk)
 
         submit_ready()
         while pending or futures:
             if not futures:
                 # 环形依赖兜底：剩余块按序逐个放行（与旧实现语义一致）
-                tid = next(iter(pending))
-                futures[pool.submit(run, pending.pop(tid))] = tid
+                _submit([next(iter(pending))])
             finished, _ = wait(set(futures), return_when=FIRST_COMPLETED)
             for fut in finished:
-                tid = futures.pop(fut)
-                filled[tid] = fut.result()   # run 返回填充载荷；取消/意外异常在此冒泡
-                done_ids.add(tid)
+                tids = futures.pop(fut)
+                res = fut.result()   # run 返回单块载荷 / run_many 返回 temp_id→载荷；取消/异常在此冒泡
+                if isinstance(res, dict) and "_temp_id" in res:
+                    filled[tids[0]] = res
+                else:
+                    filled.update(res)
+                done_ids.update(tids)
                 if progress:
                     progress({"stage": "fill", "done": len(filled), "total": total})
             submit_ready()

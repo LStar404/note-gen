@@ -72,13 +72,15 @@ def test_outline_streams_items_per_batch():
 
 
 def test_n_motivation_scales_with_batch_share():
-    """分批变小后 motivation 配额按批内占比折算，避免一章冒出几十个 motivation。"""
+    """motivation 配额随章体量与批占比缩放：小章不再每批喊「最多 6 个」注水。"""
     anchors = [mk_anchor(i) for i in range(10)]
     client = RecordingClient()
-    call_outline(client, anchors)                      # 每批 2/10 → 最多 1 个
+    call_outline(client, anchors)                      # 小章（10 锚点）→ 配额 1
     assert all("最多 1 个" in c["prompt"] for c in client.calls), \
         [c["prompt"][c["prompt"].find("motivation"):][:24] for c in client.calls]
 
+    big = [dict(mk_anchor(i), content="短锚点") for i in range(80)]
     client2 = RecordingClient()
-    call_outline(client2, anchors, batch_out=10 ** 9)  # 单批 → 最多 6 个
-    assert "最多 6 个" in client2.calls[0]["prompt"]
+    call_outline(client2, big, batch_out=10 ** 9)      # 大章单批 → 配额随目标块数升至 4
+    assert len(client2.calls) == 1, "短锚点应单批"
+    assert "最多 4 个" in client2.calls[0]["prompt"]

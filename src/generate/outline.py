@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -16,6 +18,49 @@ from src.core.text import estimate_tokens
 from .prompts import (OUTLINE_PROMPT, SYSTEM_PROMPT, anchor_summary_line,
                       build_outline_schema, language_instruction)
 from .validate_retry import parse_json_output, validate_outline_payload
+
+
+_PREFACE_RE = re.compile(r"前言|序言|引言|绪论|目录|记号|记法|致谢|附录|contents|preface|foreword|notation", re.I)
+# 体量截断的牺牲顺序（数值小的先剪）：定义/定理等必保类型不进此表
+_TRIM_ORDER = {"link": 0, "motivation": 1, "figure": 2}
+
+
+def _trim_to_cap(items: list[dict], cap: int) -> list[dict]:
+    """按体量上限截断：先剪 link/motivation/figure，定义/定理等必保全覆盖。
+
+    「覆盖全部定义与定理」优先于体量上限（提纲规则硬约束）；
+    必保类型即使超限也全部保留。
+    """
+    keep = [it for it in items if it.get("type") not in _TRIM_ORDER]
+    flex = sorted((it for it in items if it.get("type") in _TRIM_ORDER),
+                  key=lambda it: (_TRIM_ORDER.get(it.get("type"), 9), it.get("order", 0)))
+    room = max(0, cap - len(keep))
+    merged = keep + flex[:room]
+    merged.sort(key=lambda it: it.get("order", 0))
+    return merged
+
+
+def chapter_size_plan(n_anchors: int, chapter_title: str) -> tuple[int, int, str]:
+    """章体量自适应：返回（目标块数, 硬上限, 提示词说明）。
+
+    前言/目录/记号类与小章从严控量（曾出现 7 条锚点出 6 块、前言出 38 块的
+    注水）；目标靠提示词施压，上限只是反注水兜底（定义/定理不受限，必保全覆盖）。
+    """
+    if _PREFACE_RE.search(chapter_title or ""):
+        target = max(2, n_anchors // 25)
+        return target, target + 2, (
+            f"本章属于前言/目录/记号类章节，内容不多，只生成 {target} 个块左右"
+            f"（最多 {target + 2} 个）；宁缺毋滥，不做展开性笔记。")
+    if n_anchors <= 15:
+        target = max(2, n_anchors // 4)
+        return target, max(4, n_anchors // 2), (
+            f"本章篇幅很小，只生成 {target} 个块左右（不超过 {max(4, n_anchors // 2)} 个），只记最核心的点。")
+    if n_anchors <= 60:
+        target = max(4, n_anchors // 5)
+        return target, n_anchors // 2, f"生成约 {target} 个块（总量不超过 {n_anchors // 2} 个）。"
+    target = n_anchors // 8 + 4
+    return target, n_anchors // 2, (
+        f"生成约 {target} 个块；以内容需要为准，可适当增减，但不得为凑数注水。")
 
 # 实测（DeepSeek 系模型）：提纲条目输出 ≈ 锚点摘要输入的 6 倍（1129 in → 7012 out）。
 # 只按输入预算分批时大批必被 max_tokens 截断 → 缩批重试（每轮都是真实调用，代价高），
@@ -92,18 +137,23 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
         # 启动即报批次总数：任务一开始进度条就有明确去向，而不是干等首批完成
         progress({"stage": "outline_start", "batches": len(batches)})
     anchor_ids = {a["anchor_id"] for a in anchors}
+    size_target, size_cap, size_note = chapter_size_plan(len(anchors), chapter.get("title", ""))
+    # 动机块总量随目标块数缩放：小章/前言不再每批都喊「最多 6 个」
+    mot_total = max(1, min(6, size_target // 3 or 1))
 
     def _run_batch(bi: int, batch: list[dict]) -> OutlineResult:
         prefix = f"{_prefix}{bi}"
         sub = OutlineResult()
         # motivation 配额按批内锚点占比折算：分批变小后每批都喊「最多 6 个」
         # 会让一章冒出几十个 motivation 块（意图是每章 ≤6）
-        n_motivation = max(1, min(6, round(6 * len(batch) / max(1, len(anchors)))))
+        n_motivation = max(1, round(mot_total * len(batch) / max(1, len(anchors))))
         prompt = OUTLINE_PROMPT.format(
             doc_kind="论文" if profile == "paper" else "教材",
             book_title=manifest.get("title", ""),
             chapter_part="整篇" if profile == "paper" else f"第 {chapter.get('title', chapter_id)} 章",
             n_motivation=n_motivation,
+            n_anchors=len(anchors),
+            size_note=size_note,
             anchor_summaries="\n".join(anchor_summary_line(a) for a in batch),
             outline_schema=json.dumps(schema, ensure_ascii=False),
         ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
@@ -159,6 +209,12 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
                 payload = parse_json_output(resp.get("output") if resp.get("output") is not None
                                             else resp.get("raw_text", ""))
                 items = validate_outline_payload(payload, anchor_ids=anchor_ids, profile=profile)
+                # 章体量硬上限（前言/小章）：按批占比折算截断，防小章注水
+                if size_cap is not None and len(items) > 1:
+                    batch_cap = max(1, math.ceil(size_cap * len(batch) / max(1, len(anchors))))
+                    if len(items) > batch_cap:
+                        items = _trim_to_cap(items, batch_cap)
+                        sub.errors.append(f"batch {bi}: 超出章体量上限，已剪除多余 link/motivation/figure")
                 for item in items:
                     item["temp_id"] = f"{prefix}-{item['temp_id']}"
                     item["depends_on"] = [f"{prefix}-{d}" if not d.startswith(prefix) else d
