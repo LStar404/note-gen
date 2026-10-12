@@ -868,7 +868,11 @@ html[data-motion="off"] *::after {
   animation: fade-in .16s ease-out;
 }
 .note-zoom {
-  width: min(880px, 92vw); max-height: 86vh; overflow: auto;
+  /* 自适应：短笔记收窄、长笔记封顶；正文区独立滚动（头/来源固定） */
+  width: fit-content;
+  min-width: min(520px, 92vw); max-width: min(920px, 92vw);
+  max-height: 88vh; overflow: hidden;
+  display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 18px; box-shadow: var(--shadow-lg);
   padding: 22px 28px;
@@ -889,7 +893,12 @@ html[data-motion="off"] *::after {
   margin-left: auto; width: 32px; height: 32px; padding: 0;
   border-radius: 99px; flex: none;
 }
-.note-zoom-body { font-size: 17px; line-height: 1.85; }
+.note-zoom-head { flex: none; }
+.note-zoom-body {
+  font-size: 17px; line-height: 1.85;
+  flex: 1 1 auto; min-height: 0; overflow: auto;
+  overscroll-behavior: contain;
+}
 .note-zoom-body p { margin: 10px 0; }
 .note-zoom-body h1, .note-zoom-body h2, .note-zoom-body h3 { margin: 16px 0 8px; }
 .note-zoom-body ul, .note-zoom-body ol { margin: 10px 0; padding-left: 24px; }
@@ -899,6 +908,7 @@ html[data-motion="off"] *::after {
 }
 .note-zoom-body img { max-width: 100%; border-radius: var(--radius-sm); }
 .note-zoom-sources {
+  flex: none;
   display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
   margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border);
 }

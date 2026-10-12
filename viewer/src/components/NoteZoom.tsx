@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { api } from "../api/client";
 import { RELATION_CN, STATUS_CN, type NoteBlock } from "../api/types";
-import { previewHtml } from "../lib/markdown";
+import { renderMarkdown } from "../lib/markdown";
 import { useStore } from "../state/store";
 
 const TYPE_ICON: Record<string, string> = {
@@ -68,9 +68,10 @@ export default function NoteZoom() {
           {block.basis === "synthesis" && <span className="badge synthesis">AI 归纳</span>}
           <button className="note-zoom-close" onClick={closeZoom} title="关闭（Esc）">✕</button>
         </div>
+        {/* 放大视图渲染全文：不得复用卡片预览（previewHtml 截断 320 字，曾吞掉乘法公理） */}
         <div
           className="note-zoom-body"
-          dangerouslySetInnerHTML={{ __html: previewHtml(block.content || "", docId ?? "") }}
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(block.content || "", docId ?? "") }}
         />
         {block.sources.length > 0 && (
           <div className="note-zoom-sources">
