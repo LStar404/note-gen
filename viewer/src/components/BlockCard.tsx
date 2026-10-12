@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { memo, useEffect, useMemo } from "react";
 import { api } from "../api/client";
 import { RELATION_CN, STATUS_CN, type NoteBlock } from "../api/types";
 import { previewHtml } from "../lib/markdown";
@@ -18,7 +18,7 @@ const TYPE_ICON: Record<string, string> = {
   experiment: "📊",
 };
 
-export default function BlockCard({ block, selected, onSelect }: {
+function BlockCard({ block, selected, onSelect }: {
   block: NoteBlock;
   selected: boolean;
   onSelect: (id: string) => void;
@@ -38,6 +38,10 @@ export default function BlockCard({ block, selected, onSelect }: {
     void fetchAnchors(block.sources.map((s) => s.anchor_id));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [block.sources]);
+  const preview = useMemo(
+    () => previewHtml(block.content || "", docId ?? ""),
+    [block.content, docId]
+  );
 
   const gotoAnchor = async (anchorId: string) => {
     try {
@@ -71,10 +75,11 @@ export default function BlockCard({ block, selected, onSelect }: {
           ⤢
         </button>
       </div>
-      {/* 卡片正文走与「预览」同一渲染器（markdown + KaTeX），不再显示裸文本 */}
+      {/* 卡片正文走与「预览」同一渲染器（markdown + KaTeX）；
+          必须 memo：每次父级重渲染都重跑 markdown+KaTeX 是列表卡顿主因 */}
       <div
         className="block-preview"
-        dangerouslySetInnerHTML={{ __html: previewHtml(block.content || "", docId ?? "") }}
+        dangerouslySetInnerHTML={{ __html: preview }}
       />
       <div className="block-sources">
         {block.sources.map((s, i) => (
@@ -94,3 +99,5 @@ export default function BlockCard({ block, selected, onSelect }: {
     </div>
   );
 }
+
+export default memo(BlockCard);
