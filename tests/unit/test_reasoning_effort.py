@@ -33,6 +33,33 @@ def test_reasoning_effort_normalized():
     assert normalize_settings({"generate": {}})["generate"]["reasoning_effort"] is None
 
 
+
+
+def test_thinking_disabled_passed_to_provider():
+    """思考开关透传：disabled 是输出效率的关键参数（实测省 9 倍输出 tokens）。"""
+    provider = DummyProvider([{"output": {"ok": 1}}])
+    cfg = {"generate": {"models": {"default": "dummy/fake"}, "thinking": "disabled"}}
+    client = LLMClient(_registry(), FakeRuntime(), cfg, overrides={"dummy": provider})
+    client.complete("fill", [{"role": "user", "content": "hi"}], schema=None, max_tokens=100)
+    assert provider.calls[0]["thinking"] == {"type": "disabled"}
+
+
+def test_thinking_omitted_when_unset():
+    provider = DummyProvider([{"output": {"ok": 1}}])
+    cfg = {"generate": {"models": {"default": "dummy/fake"}}}
+    client = LLMClient(_registry(), FakeRuntime(), cfg, overrides={"dummy": provider})
+    client.complete("fill", [{"role": "user", "content": "hi"}], schema=None, max_tokens=100)
+    assert provider.calls[0]["thinking"] is None
+
+
+def test_thinking_enabled_maps_to_body():
+    provider = DummyProvider([{"output": {"ok": 1}}])
+    cfg = {"generate": {"models": {"default": "dummy/fake"}, "thinking": "enabled"}}
+    client = LLMClient(_registry(), FakeRuntime(), cfg, overrides={"dummy": provider})
+    client.complete("fill", [{"role": "user", "content": "hi"}], schema=None, max_tokens=100)
+    assert provider.calls[0]["thinking"] == {"type": "enabled"}
+
+
 def _registry():
     from src.core.model_registry import ModelRegistry
     from src.core.paths import Layout

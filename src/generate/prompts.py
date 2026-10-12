@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from src.core.block_types import type_enum
 
-PROMPT_VERSION = "1.3.0"   # 1.3.0: 静态前缀前置（吃 DeepSeek 前缀缓存）+ 输入/输出双向瘦身
+PROMPT_VERSION = "1.4.0"   # 1.4.0: 引文短化（输出 tokens 大头是 quote 回显）+ tags 精简
 
 import json as _json
 
@@ -37,7 +37,7 @@ OUTLINE_PROMPT = """请生成教材章节的笔记块提纲 JSON，规则：
 - 每块给出章内唯一 temp_id；depends_on 只引用本章 temp_id，无自环/循环；
 - 不为没有定义/定理的章节强造该类型，原文未给证明时不得补造；
 - 给出建议 order（按阅读序，motivation 放在对应概念之前）；
-- quote 用 ≤80 字的原文片段即可（仅作提示，最终引文由填充阶段逐字精修）。
+- quote 用 ≤50 字的原文片段即可（仅作提示，最终引文由填充阶段逐字精修）；tags 最多 2 个。
 输出 JSON Schema：{outline_schema}
 <source_data>
 本章资料：{doc_kind}《{book_title}》{chapter_part}
@@ -51,7 +51,8 @@ FILL_MANY_PROMPT = """请为给定的多个笔记块分别生成内容（md/LaTe
 - motivation：说明引入动机与直觉，可综合归纳（此时 sources 置空、basis=synthesis）；
 - figure：输出图片占位符（按资料给出的占位）、图注与解读文字；
 - 返回完整 sources_patch 与 basis；未修改时返回原值，不能省略；修正只用该块实际提供的锚点 id；
-- sources_patch 的 quote 必须**逐字照抄**该块锚点原文中的连续片段（≤300 字）：禁止改写、翻译、加省略号/补标点/合并片段，只截取不改字；
+- sources_patch 的 quote 必须**逐字照抄**该块锚点原文中的连续片段（≤50 字）：禁止改写、翻译、加省略号/补标点/合并片段，只截取不改字；
+  引文仅用于核对，取最短足矣——长引文直接拖慢生成；tags 最多 2 个；
 - 篇幅克制（直接决定生成速度，禁止注水）：definition/theorem 正文 150-400 字；motivation/figure/link ≤150 字。
   只写块内容本身，不写背景铺垫、历史评价、教学意义、章节预告；不得复述本块标题；
 输出 JSON Schema：{fill_many_schema}
@@ -64,7 +65,8 @@ FILL_PROMPT = """请生成笔记块的内容（md/LaTeX），要求：
 - motivation：说明引入动机与直觉，可综合归纳（此时 sources 置空、basis=synthesis）；
 - figure：输出图片占位符（按资料给出的占位）、图注与解读文字；
 - 返回完整 sources_patch 与 basis；未修改时返回原值，不能省略；修正只用本次实际提供的锚点 id；
-- sources_patch 的 quote 必须**逐字照抄**锚点原文中的连续片段（≤300 字）：禁止改写、翻译、加省略号/补标点/合并片段，只截取不改字；
+- sources_patch 的 quote 必须**逐字照抄**锚点原文中的连续片段（≤50 字）：禁止改写、翻译、加省略号/补标点/合并片段，只截取不改字；
+  引文仅用于核对，取最短足矣——长引文直接拖慢生成；tags 最多 2 个；
 - 篇幅克制（直接决定生成速度，禁止注水）：definition/theorem 正文 150-400 字；motivation/figure/link ≤150 字。
   只写块内容本身，不写背景铺垫、历史评价、教学意义、章节预告；不得复述本块标题；
 输出 JSON Schema：{fill_schema}
@@ -117,7 +119,7 @@ def build_outline_schema(profile: str = "textbook") -> dict:
                                 "required": ["anchor_id", "quote", "relation"],
                                 "properties": {
                                     "anchor_id": {"type": "string"},
-                                    "quote": {"type": "string", "maxLength": 300},
+                                    "quote": {"type": "string", "maxLength": 60},
                                     "relation": {"enum": SOURCE_RELATION_ENUM},
                                 },
                                 "additionalProperties": False,
@@ -150,7 +152,7 @@ def build_fill_schema(profile: str = "textbook") -> dict:
                     "required": ["anchor_id", "quote", "relation"],
                     "properties": {
                         "anchor_id": {"type": "string"},
-                        "quote": {"type": "string", "maxLength": 300},
+                        "quote": {"type": "string", "maxLength": 60},
                         "relation": {"enum": SOURCE_RELATION_ENUM},
                     },
                     "additionalProperties": False,

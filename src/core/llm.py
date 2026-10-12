@@ -75,10 +75,15 @@ class OpenAICompatAdapter:
                  max_tokens: int, temperature: float | None = None,
                  tools: list[dict] | None = None, tool_choice: str | dict | None = None,
                  json_schema: bool = True, context: dict | None = None,
-                 reasoning_effort: str | None = None) -> dict:
+                 reasoning_effort: str | None = None,
+                 thinking: dict | None = None) -> dict:
         import httpx
 
         body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
+        if thinking:
+            # 思考开关（DeepSeek 实测：disabled 同题 1.9s/230 tokens vs 开思考 9.4s/2020）；
+            # 不认识该字段的网关直接忽略（OpenAI 兼容），不会报错
+            body["thinking"] = thinking
         if temperature is not None:
             body["temperature"] = temperature
         if reasoning_effort:
@@ -174,10 +179,11 @@ class DummyProvider:
                  max_tokens: int, temperature: float | None = None,
                  tools: list[dict] | None = None, tool_choice: str | dict | None = None,
                  json_schema: bool = True, context: dict | None = None,
-                 reasoning_effort: str | None = None) -> dict:
+                 reasoning_effort: str | None = None,
+                 thinking: dict | None = None) -> dict:
         self.calls.append({"model": model, "messages": messages, "tools": tools,
                            "tool_choice": tool_choice, "schema": schema,
-                           "reasoning_effort": reasoning_effort})
+                           "reasoning_effort": reasoning_effort, "thinking": thinking})
         item = self.responses.pop(0) if self.responses else {}
         if isinstance(item, Exception):
             raise item
@@ -264,6 +270,10 @@ class LLMClient:
         self.timeout = float((config.get("generate", {}) or {}).get("timeout", 600.0))
         # 推理深度（generate.reasoning_effort）：low/medium/high，空=供应商默认
         self.reasoning_effort = (config.get("generate", {}) or {}).get("reasoning_effort") or None
+        # 思考开关（generate.thinking）：disabled/enabled/default
+        _th = ((config.get("generate", {}) or {}).get("thinking") or "").strip().lower()
+        self.thinking = {"disabled": {"type": "disabled"},
+                         "enabled": {"type": "enabled"}}.get(_th)
         # 全局在途请求总闸（generate.max_concurrent_requests，默认 8）：
         # 并行分章后「章数 × 章内并发」会一次性打出十几个并发请求，
         # 触发供应商限流反而被退避拖慢——按信号量把总并发钉在上限内
@@ -328,7 +338,8 @@ class LLMClient:
                                               tool_choice=tool_choice,
                                               json_schema=bool(caps.get("json_schema")),
                                               context={"task": task, "doc_id": doc_id, "chapter_id": chapter_id},
-                                              reasoning_effort=self.reasoning_effort)
+                                              reasoning_effort=self.reasoning_effort,
+                                              thinking=self.thinking)
                 finally:
                     self._slots.release()
                 with self._stats_lock:

@@ -24,7 +24,7 @@ generate:
   outline_max_in: 32000
   fill_max_in: 5000
   outline_max_out: 32000
-  fill_max_out: 12000
+  fill_max_out: 6000
   timeout: 600
   concurrency: 10
   # 小块合批：N 个就绪块一次填充调用（调用数降为 1/N，短块收益最大）；
@@ -43,6 +43,9 @@ generate:
   # 推理深度：low/medium/high（推理型模型思考越深越慢；low 提速明显，
   # 复杂章节若质量不足可改 medium）
   reasoning_effort: low
+  # 思考开关（deepseek-flash 支持；不认识的网关忽略）：disabled 实测同题 1.9s/230 tokens
+  # vs 开思考 9.4s/2020 tokens，内容质量相当。质量不足时改 minimal / default
+  thinking: disabled
   max_cost_per_chapter: 0.0
   temperature: 0.2
   output_language: zh
