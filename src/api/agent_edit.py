@@ -251,6 +251,7 @@ def run_tool(store: DocStore, tool: str, args: dict, *, author: str = "agent",
             links.append(args["to_block_id"])
         block = store.update_block(args["from_block_id"], {"links": links},
                                    expected_revision=None, author=author,
+                                   unlocked_for_agent=unlocked_for_agent,
                                    message=args.get("message", "agent 链接"))
         return {"tool": tool, "block_id": block["id"], "revision": block["revision"]}
     raise InputError(f"未知工具: {tool}")

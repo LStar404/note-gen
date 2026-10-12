@@ -59,3 +59,44 @@ def test_create_block_does_not_store_message_field(workspace, sample_doc):
         assert "message" not in blk, "message 不得进入块记录"
         store = DocStore(layout, doc_id)
         assert "message" not in store.get_block(blk["id"]), "入库记录不得含 message 字段"
+
+
+def test_agent_link_blocks_respects_manual_unlock(sample_doc):
+    """计划已解锁的手工块可被 link_blocks 修改（run_tool 曾漏传解锁标志）。
+    同时验证未解锁时仍按 4.5.2 拒绝。"""
+    from src.api.agent_edit import run_tool
+    from src.core.errors import BlockLocked
+
+    layout, doc_id = sample_doc
+    store = DocStore(layout, doc_id)
+    b1 = store.create_block({"title": "甲", "content": "c", "type": "link", "order": 11.0,
+                             "basis": "synthesis", "sources": []},
+                            author="human", chapter_id="ch01")
+    b2 = store.create_block({"title": "乙", "content": "c", "type": "link", "order": 12.0,
+                             "basis": "synthesis", "sources": []},
+                            author="human", chapter_id="ch01")
+    try:
+        run_tool(store, "link_blocks",
+                 {"from_block_id": b1["id"], "to_block_id": b2["id"]},
+                 author="agent", unlocked_for_agent=False)
+        raise AssertionError("未解锁时应拒绝")
+    except BlockLocked:
+        pass
+    run_tool(store, "link_blocks",
+             {"from_block_id": b1["id"], "to_block_id": b2["id"]},
+             author="agent", unlocked_for_agent=True)
+    got = store.get_block(b1["id"])
+    assert b2["id"] in (got.get("links") or []), got.get("links")
+
+
+def test_chapter_finish_clamps_inverted_ranges():
+    """同页起章会让 page_end 倒挂（次章起始-1）：必须钳到起点，不得产出空区间章。"""
+    from src.ingest.chapter_detect import _finish
+
+    out = _finish([
+        {"chapter_id": "ch01", "title": "A", "page_start": 5, "page_end": 4},
+        {"chapter_id": "ch02", "title": "B", "page_start": 5, "page_end": 20},
+    ], 30)
+    assert out[0]["page_end"] >= out[0]["page_start"], out[0]
+    assert out[0]["page_end"] == 5
+    assert out[1]["page_start"] == 5 and out[1]["page_end"] == 20

@@ -64,7 +64,9 @@ def _finish(chapters: list[dict], n_pages: int) -> list[dict]:
     for c in chapters:
         c = dict(c)
         c["page_start"] = max(1, int(c["page_start"]))
-        c["page_end"] = min(n_pages, max(1, int(c["page_end"])))
+        # 同页起章（目录两条目同页）会让 page_end = 次章起始-1 倒挂：钳到起点，
+        # 否则出现 page_start>page_end 的空区间章节（无页归属、无法生成）
+        c["page_end"] = max(c["page_start"], min(n_pages, max(1, int(c["page_end"]))))
         c.setdefault("outline_hash", None)
         out.append(c)
     return out
