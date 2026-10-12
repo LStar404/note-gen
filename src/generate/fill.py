@@ -6,7 +6,7 @@ import json
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Callable
 
-from src.core.errors import (LLMError, PriceUnknown, RetryableError,
+from src.core.errors import (LLMError, PriceUnknown, QuotaExhausted, RetryableError,
                              SchemaViolation, TaskCancelled)
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
@@ -87,6 +87,13 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
                                    task_id=task_id, budget=budget)
         except TaskCancelled:
             raise
+        except QuotaExhausted as exc:
+            # 配额耗尽按块隔离（而不是炸穿整章）：本块标失败=旧块保留，
+            # 已产出结果照常落缓存——下次生成自动续填失败块、复用已完成块
+            errors.append(str(exc.message))
+            return {"_temp_id": spec["temp_id"], "_status": "failed", "_errors": errors,
+                    "content": "", "content_format": "md_latex", "tags": [],
+                    "sources_patch": spec.get("sources", []), "basis": spec.get("basis", "anchored")}
         except (LLMError, RetryableError) as exc:
             # LLM 调用层失败按块隔离（余额耗尽/超时/限流）：记失败原因并返回，
             # 不得冒泡拖垮整章——否则已完成的填充全部丢弃（实测 402 中断丢掉 32 块成果）。

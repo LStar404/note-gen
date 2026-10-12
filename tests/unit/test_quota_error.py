@@ -1,4 +1,6 @@
-"""配额用尽（402 / 429+quota）必须与限流区分：不重试、不按块隔离、整章快速失败。"""
+"""配额用尽（402 / 429+quota）必须与限流区分：不重试、快速失败。
+配额错误按块隔离为失败结果（已完成块落缓存、下次生成续填），
+由 LLMClient 熔断保证不逐块白试上游 API。"""
 
 from __future__ import annotations
 
@@ -57,8 +59,8 @@ def test_auth_error_carries_upstream_message(monkeypatch):
     assert "Invalid API Key" in str(ei.value)
 
 
-def test_fill_one_lets_quota_bubble():
-    """账号级配额错误不得按块隔离——否则整章几十个块会逐个白试一遍。"""
+def test_fill_one_isolates_quota_as_failed_result():
+    """配额错误按块隔离为失败结果（保整章缓存、下次续填）；不白试由熔断保证。"""
 
     class Client:
         def complete(self, *a, **kw):
@@ -66,6 +68,7 @@ def test_fill_one_lets_quota_bubble():
 
     spec = {"temp_id": "t1", "type": "motivation", "title": "x", "basis": "synthesis",
             "sources": [], "depends_on": []}
-    with pytest.raises(QuotaExhausted):
-        fill_one(Client(), doc_id="d", chapter_id="ch01", spec=spec, anchors_by_id={},
-                 anchors=[], model=None, config={"generate": {}}, related_titles=[])
+    result = fill_one(Client(), doc_id="d", chapter_id="ch01", spec=spec, anchors_by_id={},
+                      anchors=[], model=None, config={"generate": {}}, related_titles=[])
+    assert result["_status"] == "failed", result
+    assert any("配额已用尽" in e for e in result["_errors"]), result

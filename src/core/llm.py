@@ -256,6 +256,9 @@ class LLMClient:
                                         "call_seconds": 0.0, "wait_seconds": 0.0,
                                         "tokens_in": 0, "tokens_out": 0}
         self._stats_lock = threading.Lock()
+        # 配额熔断：一次 QuotaExhausted 后本次任务内不再发请求（剩余块快速标失败，
+        # 已产出结果落缓存，下次生成自动续填——不再整章作废）
+        self.halted_reason: str | None = None
         # 单次调用超时（5.3.2 可配置）：推理型模型（MiMo 等）单次可超 2 分钟，
         # 默认 120s 会被误判超时并白重试（实测 ch08 提纲阶段多次 success=0 空转）
         self.timeout = float((config.get("generate", {}) or {}).get("timeout", 600.0))
@@ -293,6 +296,8 @@ class LLMClient:
                  model: str | None = None, doc_id: str | None = None,
                  chapter_id: str | None = None, task_id: str | None = None,
                  budget: BudgetGuard | None = None) -> dict:
+        if self.halted_reason:
+            raise QuotaExhausted(self.halted_reason)
         model_name = model or self.route(task)
         provider_cfg, model_cfg, adapter = self._provider_for(model_name)
         # 路由名是 "provider/model"，供应商 API 只认裸模型 id
@@ -343,8 +348,10 @@ class LLMClient:
                     raise
                 time.sleep(min(8.0, 0.5 * (2 ** attempts)))
                 continue
-            except NoteGenError:
+            except NoteGenError as exc:
                 # 不可重试错误（鉴权/参数/模型不存在）：只记一次失败，立即上抛
+                if isinstance(exc, QuotaExhausted):
+                    self.halted_reason = exc.message
                 self.runtime.log_usage(
                     provider_id=provider_cfg["id"], model=model_name, task=task,
                     request_id=request_id, doc_id=doc_id, chapter_id=chapter_id,

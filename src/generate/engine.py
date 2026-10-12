@@ -98,6 +98,24 @@ def _normalize_sources(sources: list | None) -> list:
     return out[:5]
 
 
+def _build_candidates(items: list[dict], filled: dict[str, dict]) -> list[dict]:
+    """提纲条目 + 填充结果 → 候选块（正常路径与断点快照共用同一构建）。"""
+    out: list[dict] = []
+    for item in items:
+        f = filled.get(item["temp_id"], {})
+        cand = dict(item)
+        cand["sources"] = _normalize_sources(f.get("sources_patch", item.get("sources", [])))
+        cand["basis"] = f.get("basis", item.get("basis", "anchored"))
+        cand["content"] = f.get("content", "")
+        cand["content_format"] = f.get("content_format", "md_latex")
+        cand["tags"] = f.get("tags", [])
+        cand["_status"] = f.get("_status", "ok") if f else "failed"
+        cand["_errors"] = f.get("_errors", [])
+        cand["status"] = "needs_review" if cand["_status"] == "needs_review" else "ai_generated"
+        out.append(cand)
+    return out
+
+
 def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = None,
                      client: LLMClient | None = None, config: dict | None = None,
                      registry: ModelRegistry | None = None, model: str | None = None,
@@ -212,6 +230,7 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
         pipelined = fill_conc > 1
         pipe_lock = threading.Lock()
         filled_all: dict[str, dict] = {}
+        acc_items: list[dict] = []      # 已出批的提纲条目（断点快照用）
         fill_state = {"total": 0}
         batch_done: dict[int, int] = {}
         fill_futs: list = []
@@ -245,6 +264,7 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
             with pipe_lock:
                 idx = batch_seq[0]
                 batch_seq[0] += 1
+                acc_items.extend(items)
                 fill_state["total"] += len(items)
                 done = sum(batch_done.values())
                 total = fill_state["total"]
@@ -287,24 +307,24 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
             if fill_pool is not None:
                 # 取消/异常：不等在途填充（它们会在下一个检查点自行退出）
                 fill_pool.shutdown(wait=False, cancel_futures=True)
+            # 断点保护：已产出结果落缓存（取消/配额/意外异常都不丢），
+            # 下次生成自动续填失败块、复用已完成块——不再整章作废重烧
+            try:
+                with pipe_lock:
+                    snap_items, snap_filled = list(acc_items), dict(filled_all)
+                if use_cache and (snap_items or snap_filled):
+                    write_cache(layout, doc_id, chapter_id, key,
+                                {"candidates": _build_candidates(snap_items, snap_filled),
+                                 "outline_complete": False,
+                                 "meta": {"prompt_version": PROMPT_VERSION}})
+            except Exception:
+                pass      # 快照失败不得掩盖原始异常
             raise
         else:
             if fill_pool is not None:
                 fill_pool.shutdown(wait=True)
         report.setdefault("timing", {})["gen_s"] = round(time.monotonic() - t_gen, 2)  # 提纲+填充墙钟（流水线重叠）
-        candidates = []
-        for item in outline.items:
-            f = filled.get(item["temp_id"], {})
-            cand = dict(item)
-            cand["sources"] = _normalize_sources(f.get("sources_patch", item.get("sources", [])))
-            cand["basis"] = f.get("basis", item.get("basis", "anchored"))
-            cand["content"] = f.get("content", "")
-            cand["content_format"] = f.get("content_format", "md_latex")
-            cand["tags"] = f.get("tags", [])
-            cand["_status"] = f.get("_status", "ok")
-            cand["_errors"] = f.get("_errors", [])
-            cand["status"] = "needs_review" if f.get("_status") == "needs_review" else "ai_generated"
-            candidates.append(cand)
+        candidates = _build_candidates(outline.items, filled)
         if use_cache:
             write_cache(layout, doc_id, chapter_id, key,
                         {"candidates": candidates, "outline_complete": outline.complete,
@@ -352,6 +372,12 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
     report.setdefault("timing", {})["commit_s"] = round(time.monotonic() - t_commit, 2)  # 含锁排队+合并+提交+链接
     if report.get("failures") or merge_report.get("failures"):
         report["status"] = "partial"
+    # 配额耗尽 = 「暂停」而非报错：已完成块已保存并会被下次生成复用
+    if report.get("status") == "partial" and getattr(client, "halted_reason", None):
+        report["status"] = "paused"
+        report["resume_hint"] = (("配额已用尽（%s）：已完成的块已保存并在下次生成时复用；"
+                                  "为供应商充值/换 Key/换模型后再次点击生成，将自动续填剩余块。")
+                                 % str(client.halted_reason)[:120])
     _finish(report)
     return report
 
