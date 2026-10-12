@@ -12,11 +12,12 @@ parser:
 chapters_override: []
 generate:
   models:
-    # 填充是机械复述任务：deepseek-flash 实测同题质量持平、时延更短、
-    # 历史成功率 99.5%%（mimo 86%%，失败即重试浪费）——结构提纲仍用 reasoning 模型
-    # 想换回：fill: mimo/mimo-v2.6-flash
-    default: mimo/mimo-v2.6-flash
-    outline: mimo/mimo-v2.6-flash
+    # 笔记生成统一走 deepseek-flash（端点仅支持 deepseek-flash / deepseek-v4-pro，
+    # 无 4.1 版；deepseek-v4-flash 是 deepseek-flash 的别名）：实测同题质量持平、
+    # 时延更短、历史成功率 99.5%%。若要提纲用推理模型：outline: mimo/mimo-v2.6-flash；
+    # 若要更高质量：fill: deepseek/deepseek-v4-pro
+    default: deepseek/deepseek-flash
+    outline: deepseek/deepseek-flash
     fill: deepseek/deepseek-flash
     agent: null
     link: null
