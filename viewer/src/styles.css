@@ -597,7 +597,13 @@ button:active, .file-button:active { box-shadow: none; }
   display: flex; gap: 8px; align-items: center; padding: 10px 14px;
   border-bottom: 1px solid var(--border); background: var(--panel-2); flex-wrap: wrap;
 }
-.detail-panel { padding: 0 2px 10px; }
+.detail-panel {
+  padding: 0 2px 10px;
+  /* 上方「组件类名映射」把 overflow 定成了 hidden（截断且无滚动条）：
+     恢复纵向滚动；子项 flex:none 防列向压缩（压缩了就永远不出滚动条） */
+  overflow-y: auto; overflow-x: hidden;
+}
+.detail-panel > * { flex: none; }
 
 /* 滚动条 */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
