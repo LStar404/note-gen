@@ -54,6 +54,7 @@ def link_doc(doc_id: str, chapter_id: str | None = None, *, layout: Layout | Non
         rows = [dict(b) for b in blocks_by_ch.get(ch, [])]
         suggestions = suggest_links(ch, rows, anchors_by_ch.get(ch, []))
         changed = False
+        deleted_ids = {x["id"] for x in all_blocks if x.get("deleted_at")}   # 提到循环外：曾按链接逐个重建
         for b in rows:
             if b.get("deleted_at"):
                 continue
@@ -69,7 +70,8 @@ def link_doc(doc_id: str, chapter_id: str | None = None, *, layout: Layout | Non
                 if ln.startswith("http://") or ln.startswith("https://") or ln.startswith("ref_"):
                     valid.append(ln)
                     continue
-                if ln not in all_anchor_ids and ln in {x["id"] for x in all_blocks if x.get("deleted_at")}:
+                # 4.6.2：links 只允许块 id / URL / ref_（锚点引用走 sources，不是 links）
+                if ln in deleted_ids:
                     report["dead_links"].append({"block_id": b["id"], "link": ln, "reason": "deleted_target"})
                     continue
                 target = next((x for x in all_blocks if x["id"] == ln), None)

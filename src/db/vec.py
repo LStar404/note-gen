@@ -10,6 +10,15 @@ DEFAULT_DIM = 1024
 DEFAULT_THRESHOLD = 0.55   # cosine 相似度阈值（6.3.3）
 
 
+def cosine_from_l2(distance: float) -> float:
+    """欧氏距离 → 余弦相似度（向量已 L2 归一化，cos = 1 - d²/2）。
+
+    vec0 的 MATCH 返回欧氏距离；旧实现 1-d 对单位向量不成立，
+    阈值 0.55 的判定点整体错位（相似度被系统性低估）。
+    """
+    return 1.0 - float(distance) ** 2 / 2.0
+
+
 def vec_available() -> bool:
     try:
         import sqlite_vec  # noqa: F401
@@ -94,7 +103,7 @@ def search_vec(layout: Layout, doc_id: str, query_vec: list[float], *, k: int = 
         ).fetchall()
         out = []
         for r in rows:
-            similarity = 1.0 - float(r["distance"])
+            similarity = cosine_from_l2(float(r["distance"]))
             if similarity < threshold:
                 continue
             detail = conn.execute("SELECT * FROM anchors WHERE anchor_id=?",

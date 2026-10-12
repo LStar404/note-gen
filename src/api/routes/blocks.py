@@ -56,7 +56,9 @@ def create_block(request: Request, doc_id: str, chapter_id: str, body: dict):
     st = state(request)
     store = DocStore(st.layout, doc_id)
     author = body.pop("author", "human")
-    block = store.create_block(body, author=author, message=body.get("message", "新建块"),
+    # message 是历史备注而非块字段：不摘掉会被 dict(payload) 原样写进块记录
+    message = body.pop("message", "新建块")
+    block = store.create_block(body, author=author, message=message,
                                chapter_id=chapter_id)
     return block
 
