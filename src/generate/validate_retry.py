@@ -123,13 +123,15 @@ def validate_fill_payload(payload: dict, *, allowed_anchor_ids: set[str],
     # JSON 转义撞车会把裸 LaTeX 的 \b/\t/\f/\n/\r/\u 吃成控制字符——
     # \bigcap 存成 0x08+"igcap"，渲染出来正是用户看到的 "Digcap" 破公式。
     # 无论上游怎么犯，存储层都不再被污染。
-    from src.core.text import normalize_math_text, sanitize_control_chars
+    from src.core.text import (normalize_math_text, repair_stray_latex,
+                               sanitize_control_chars)
 
     for key in ("content", "title"):
         v = payload.get(key)
         if isinstance(v, str):
-            # 先还原控制字符，再做公式规范化（跨行行内公式/丢反斜杠/裸希腊字母）
-            payload[key] = normalize_math_text(sanitize_control_chars(v))
+            # 先还原控制字符，再修文本段越界命令（\Rightarrow 等包进数学、
+            # \href 转链接），最后公式规范化（跨行行内公式/丢反斜杠/裸希腊字母）
+            payload[key] = normalize_math_text(repair_stray_latex(sanitize_control_chars(v)))
     # 死图占位符：不在本块来源里的 ![{fig}] 一律丢掉（前端只会拿到 404 隐形破图）
     if isinstance(payload.get("content"), str):
         payload["content"] = strip_placeholder_figures(payload["content"], spec)

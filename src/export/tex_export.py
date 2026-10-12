@@ -50,12 +50,25 @@ def md_inline_to_tex(text: str) -> str:
         if kind == "math":
             out.append(seg)
             continue
+        # 图/链接/代码转换产物是 TeX 命令，必须先藏起来——否则后续 tex_escape
+        # 把 \href 转成 \textbackslash{}href\{...\} 字面垃圾（曾致导出链接全坏）
+        gen: list[str] = []
+
+        def _stash(m: "re.Match[str]", build) -> str:
+            gen.append(build(m))
+            return chr(0) + str(len(gen) - 1) + chr(0)
+
         seg = IMAGE_RE.sub(
-            lambda m: (B + "begin{figure}[h]" + B + "centering" + B + "includegraphics[width=0.8" +
-                       B + "linewidth]{" + m.group(2) + "}" + B + "caption{" + tex_escape(m.group(1)) +
-                       "}" + B + "end{figure}"), seg)
-        seg = LINK_RE.sub(lambda m: B + "href{" + m.group(2) + "}{" + tex_escape(m.group(1)) + "}", seg)
-        seg = FENCE_RE.sub(lambda m: B + "begin{verbatim}" + m.group(1) + B + "end{verbatim}", seg)
+            lambda m: _stash(m, lambda mm: (B + "begin{figure}[h]" + B + "centering" +
+                                            B + "includegraphics[width=0.8" + B + "linewidth]{" + mm.group(2) +
+                                            "}" + B + "caption{" + tex_escape(mm.group(1)) + "}" +
+                                            B + "end{figure}")), seg)
+        seg = LINK_RE.sub(
+            lambda m: _stash(m, lambda mm: B + "href{" + mm.group(2) + "}{" +
+                                          tex_escape(mm.group(1)) + "}"), seg)
+        seg = FENCE_RE.sub(
+            lambda m: _stash(m, lambda mm: B + "begin{verbatim}" + mm.group(1) +
+                                          B + "end{verbatim}"), seg)
         pieces = re.split(r"(\*\*[^*]+?\*\*|(?<!\*)\*[^*]+?\*(?!\*))", seg)
         buf = ""
         for piece in pieces:
@@ -65,6 +78,8 @@ def md_inline_to_tex(text: str) -> str:
                 buf += B + "textit{" + tex_escape(piece[1:-1]) + "}"
             else:
                 buf += tex_escape(piece)
+        for i, g in enumerate(gen):
+            buf = buf.replace(chr(0) + str(i) + chr(0), g)
         out.append(buf)
     return "".join(out)
 

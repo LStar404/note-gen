@@ -301,6 +301,54 @@ def _normalize_math_span(seg: str) -> str:
     return _JUNK_CHARS_RE.sub("", work)
 
 
+# ---- 数学模式外的 LaTeX 命令修复（生成侧入库闸门） ----
+_TEXT_MARKUP_CMDS = {"text", "textbf", "textit", "textrm", "textsf", "texttt"}
+_STRUCTURAL_CMDS = {"begin", "end", "cases", "matrix", "pmatrix", "bmatrix", "vmatrix",
+                    "array", "aligned", "align", "left", "right", "bigl", "bigr",
+                    "Bigl", "Bigr", "biggl", "biggr", "Biggl", "Biggr",
+                    "hspace", "vspace", "displaystyle", "textstyle", "scriptstyle"}
+# 文本模式里的空格命令无意义（渲染器显示字面命令）：直接丢弃
+_STRAY_SPACING_RE = re.compile(
+    _B * 2 + r"(?:qquad|quad|hspace|vspace)(?![A-Za-z])(?:\s*\{[^{}]*\})?|" + _B + r"[;,:!]"
+)
+_MATH_ONLY_CMDS = frozenset(MATH_COMMANDS - _TEXT_MARKUP_CMDS - _STRUCTURAL_CMDS)
+_HREF_RE = re.compile(_B * 2 + r"href\{([^{}]*)\}\{([^{}]*)\}")
+_STRAY_CMD_RE = re.compile(
+    _B * 2 + "(" + "|".join(sorted(_MATH_ONLY_CMDS, key=len, reverse=True)) + ")(?![A-Za-z])"
+    r"((?:\s*\{[^{}]*\})*)"
+)
+
+
+def repair_stray_latex(content: str) -> str:
+    r"""文本段里的 LaTeX 命令修复（生成侧入库闸门 + 存量修复）。
+
+    1) \href{a}{b} → [b](a)（LaTeX 链接写法转 Markdown，导出/检索才认）
+    2) 空格命令（\qquad 等）文本模式无意义 → 丢弃
+    3) 数学专用命令（\Rightarrow 等）→ 包进 \(..\)，否则渲染成字面垃圾
+    代码块与已有公式段（$..$/$$..$$/\(..\)/\[..\]）原样保护。
+    """
+    if not content or _B not in content:
+        return content
+    masked: list[str] = []
+
+    def _keep(m: "re.Match[str]") -> str:
+        masked.append(m.group(0))
+        return chr(1) + str(len(masked) - 1) + chr(1)
+
+    text = _FENCE_RE.sub(_keep, content)
+    text = _MATH_SPAN_RE.sub(_keep, text)
+    text = re.sub(_B * 2 + r"\([\s\S]*?" + _B * 2 + r"\)", _keep, text)
+    text = re.sub(_B * 2 + r"\[[\s\S]*?" + _B * 2 + r"\]", _keep, text)
+
+    text = _HREF_RE.sub(lambda m: "[" + m.group(2) + "](" + m.group(1) + ")", text)
+    text = _STRAY_SPACING_RE.sub("", text)
+    text = _STRAY_CMD_RE.sub(lambda m: _B + "(" + m.group(0) + _B + ")", text)
+
+    for i, original in enumerate(masked):
+        text = text.replace(chr(1) + str(i) + chr(1), original)
+    return text
+
+
 def normalize_math_text(content: str) -> str:
     """公式文本规范化（入库闸门 + 存量修复）。
 
@@ -309,6 +357,7 @@ def normalize_math_text(content: str) -> str:
        还原为反斜杠；其余行内换行并成空格
     2) 数学里的裸 Unicode 希腊字母（σ/λ/μ…）改用 LaTeX 命令
     3) 清除数学里的异体字/私用区垃圾字符
+    文本段的越界命令由 repair_stray_latex 处理（生成侧闸门链上先跑）。
     """
     if not content or "$" not in content:
         return content
