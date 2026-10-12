@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { api } from "../api/client";
 import { RELATION_CN, STATUS_CN, type NoteBlock } from "../api/types";
 import { renderMarkdown } from "../lib/markdown";
+import MathText from "./MathText";
 import { useStore } from "../state/store";
 
 const TYPE_ICON: Record<string, string> = {
@@ -62,7 +63,7 @@ export default function NoteZoom() {
       <div className="note-zoom" onClick={(e) => e.stopPropagation()}>
         <div className="note-zoom-head">
           <span className="note-zoom-icon">{TYPE_ICON[block.type] ?? "📝"}</span>
-          <h2>{block.title}</h2>
+          <h2><MathText text={block.title} docId={docId ?? ""} /></h2>
           <span className={`badge status-${block.status}`}>{STATUS_CN[block.status] ?? block.status}</span>
           {block.generation_protected && <span className="badge protected">已保护</span>}
           {block.basis === "synthesis" && <span className="badge synthesis">AI 归纳</span>}

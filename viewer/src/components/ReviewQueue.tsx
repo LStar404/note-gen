@@ -1,6 +1,7 @@
 import { useStore } from "../state/store";
 import { api } from "../api/client";
 import { STATUS_CN } from "./BlockCard";
+import MathText from "./MathText";
 
 async function locateBlock(block: any) {
   const st = useStore.getState();
@@ -51,7 +52,7 @@ export default function ReviewQueue() {
         {items.map((b) => (
           <div key={b.id} className="review-row">
             <div>
-              <b>{b.title}</b> <span className="muted">{STATUS_CN[b.status]}</span>
+              <b><MathText text={b.title} /></b> <span className="muted">{STATUS_CN[b.status]}</span>
             </div>
             <div className="muted">{(b.content ?? "").slice(0, 120)}</div>
             <button onClick={() => void locateBlock(b)}>定位并对照原文</button>

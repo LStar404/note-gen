@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type NoteBlock } from "../api/client";
 import { STATUS_CN } from "../api/types";
 import { useStore } from "../state/store";
+import MathText from "./MathText";
 
 export default function BlockDetailPanel() {
   const docId = useStore((s) => s.docId);
@@ -69,7 +70,7 @@ export default function BlockDetailPanel() {
       {pageBlocks.length === 0 && <div className="empty">本页没有关联块</div>}
       {pageBlocks.map((b) => (
         <button key={b.block_id} className="hit-block" onClick={() => useStore.getState().selectBlock(b.block_id)}>
-          {b.title}
+          <MathText text={b.title} />
         </button>
       ))}
 
@@ -88,7 +89,7 @@ export default function BlockDetailPanel() {
                   useStore.getState().selectBlock(b.block_id);
                   document.getElementById("block-" + b.block_id)?.scrollIntoView({ behavior: "smooth", block: "center" });
                 }}>
-                  {b.title}
+                  <MathText text={b.title} />
                 </button>
               ))}
             </div>
@@ -102,7 +103,7 @@ export default function BlockDetailPanel() {
       ) : (
         <div className="detail-body">
           <div>
-            <b>{detail.block.title}</b> <span className="muted">{STATUS_CN[detail.block.status]}</span>
+            <b><MathText text={detail.block.title} /></b> <span className="muted">{STATUS_CN[detail.block.status]}</span>
           </div>
           <div className="muted">
             revision {detail.block.revision} · {detail.block.type} · order {detail.block.order}
@@ -137,7 +138,7 @@ export default function BlockDetailPanel() {
           {detail.block.links.map((l) =>
             l.startsWith("b_") ? (
               <button key={l} onClick={() => useStore.getState().selectBlock(l)}>
-                {blocks.find((b) => b.id === l)?.title ?? l}
+                <MathText text={blocks.find((b) => b.id === l)?.title ?? l} />
               </button>
             ) : (
               <div key={l} className="muted">{l}</div>

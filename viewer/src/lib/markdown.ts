@@ -145,6 +145,11 @@ export function renderMarkdown(content: string, docId: string, captions: Record<
   return renderer.render(content || "", { docId, captions } as RenderEnv);
 }
 
+/** 行内渲染（标题等单行文本）：$…$ 走 KaTeX，无块级包装。 */
+export function renderInline(content: string, docId: string = ""): string {
+  return renderer.renderInline(content || "", { docId, captions: {} } as RenderEnv);
+}
+
 /** 卡片预览截断：按行边界截，绝不切断公式——
  *  $…$ 成对保留；$$…$$ 块整体保留或整体丢弃（截断后计数为奇数就回退到开标记前）。 */
 export function previewSource(content: string, maxChars = 320): string {

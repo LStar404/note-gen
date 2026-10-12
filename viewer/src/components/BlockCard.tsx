@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { api } from "../api/client";
 import { RELATION_CN, STATUS_CN, type NoteBlock } from "../api/types";
 import { previewHtml } from "../lib/markdown";
+import MathText from "./MathText";
 import { useStore } from "../state/store";
 
 export { STATUS_CN };
@@ -54,7 +55,7 @@ export default function BlockCard({ block, selected, onSelect }: {
     <div className={`block-card ${selected ? "selected" : ""}`} onClick={() => onSelect(block.id)}>
       <div className="block-head">
         <span className="block-type">{TYPE_ICON[block.type] ?? "📝"}</span>
-        <span className="block-title">{block.title}</span>
+        <MathText className="block-title" text={block.title} docId={docId ?? ""} />
         <span className={`badge status-${block.status}`}>{STATUS_CN[block.status] ?? block.status}</span>
         {block.generation_protected && <span className="badge protected">已保护</span>}
         {block.basis === "synthesis" && <span className="badge synthesis">AI 归纳</span>}

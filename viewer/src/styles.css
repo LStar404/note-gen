@@ -895,6 +895,8 @@ html[data-motion="off"] *::after {
   background: linear-gradient(120deg, var(--accent), var(--accent-2));
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
+/* 渐变标题内嵌 KaTeX：inline-block 不吃 background-clip:text，必须给实色 */
+.note-zoom-head h2 .katex { color: var(--text); }
 .note-zoom-close {
   margin-left: auto; width: 32px; height: 32px; padding: 0;
   border-radius: 99px; flex: none;
