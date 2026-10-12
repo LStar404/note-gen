@@ -251,6 +251,11 @@ class LLMClient:
         self.config = config
         self.overrides = overrides or {}
         self._providers: dict[str, LLMProvider] = {}
+        # 调用遥测（生成报告 timing 用）：排队长 = 全局闸太紧；调用长 = 模型/输出慢
+        self.stats: dict[str, float] = {"calls": 0, "retries": 0, "failures": 0,
+                                        "call_seconds": 0.0, "wait_seconds": 0.0,
+                                        "tokens_in": 0, "tokens_out": 0}
+        self._stats_lock = threading.Lock()
         # 单次调用超时（5.3.2 可配置）：推理型模型（MiMo 等）单次可超 2 分钟，
         # 默认 120s 会被误判超时并白重试（实测 ch08 提纲阶段多次 success=0 空转）
         self.timeout = float((config.get("generate", {}) or {}).get("timeout", 600.0))
@@ -309,14 +314,26 @@ class LLMClient:
             attempts += 1
             request_id = "req_" + uuid.uuid4().hex[:16]
             try:
-                with self._slots:
+                t0 = time.monotonic()
+                self._slots.acquire()
+                t1 = time.monotonic()
+                try:
                     result = adapter.complete(api_model, messages, schema, max_tokens,
                                               temperature=temperature, tools=tools,
                                               tool_choice=tool_choice,
                                               json_schema=bool(caps.get("json_schema")),
                                               context={"task": task, "doc_id": doc_id, "chapter_id": chapter_id},
                                               reasoning_effort=self.reasoning_effort)
+                finally:
+                    self._slots.release()
+                with self._stats_lock:
+                    self.stats["calls"] += 1
+                    self.stats["wait_seconds"] += t1 - t0
+                    self.stats["call_seconds"] += time.monotonic() - t1
             except RetryableError:
+                with self._stats_lock:
+                    self.stats["retries"] += 1
+                    self.stats["failures"] += 1
                 self.runtime.log_usage(
                     provider_id=provider_cfg["id"], model=model_name, task=task,
                     request_id=request_id, doc_id=doc_id, chapter_id=chapter_id,
@@ -338,6 +355,9 @@ class LLMClient:
             usage = result.get("usage") or {}
             tin = usage.get("in") or est_in
             tout = usage.get("out") or est_out
+            with self._stats_lock:
+                self.stats["tokens_in"] += tin
+                self.stats["tokens_out"] += tout
             cost = self.registry.estimate_cost(model_name, tin, tout)
             self.runtime.log_usage(
                 provider_id=provider_cfg["id"], model=model_name, task=task,

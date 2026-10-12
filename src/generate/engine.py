@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
@@ -141,6 +142,18 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
         "model": {"outline": outline_model, "fill": fill_model},
         "failures": [],
     }
+    t_start = time.monotonic()
+
+    def _finish(rep: dict) -> dict:
+        """收尾报告：总耗时 + LLM 调用遥测（排队长=全局闸紧，调用长=模型慢）。"""
+        timing = rep.setdefault("timing", {})
+        timing["total_s"] = round(time.monotonic() - t_start, 2)
+        stats = getattr(client, "stats", None)
+        if isinstance(stats, dict):
+            timing["llm"] = {k: (round(v, 2) if isinstance(v, float) else v)
+                             for k, v in stats.items()}
+        _write_report(layout, doc_id, chapter_id, rep)
+        return rep
     if progress:
         progress({"stage": "start", "chapter_id": chapter_id})
 
@@ -239,6 +252,7 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
                 progress({"stage": "fill", "done": done, "total": total})
             fill_futs.append(fill_pool.submit(_run_fill, items, idx))
 
+        t_gen = time.monotonic()
         try:
             outline = generate_outline(client, doc_id=doc_id, chapter_id=chapter_id, manifest=manifest,
                                        anchors=anchors, model=outline_model,
@@ -253,7 +267,7 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
                     fill_pool.shutdown(wait=True)
                 report["status"] = "failed"
                 report["failures"].append({"stage": "outline", "reason": "; ".join(outline.errors) or "空提纲"})
-                _write_report(layout, doc_id, chapter_id, report)
+                _finish(report)
                 return report
             if progress:
                 progress({"stage": "outline_done", "count": len(outline.items)})
@@ -277,6 +291,7 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
         else:
             if fill_pool is not None:
                 fill_pool.shutdown(wait=True)
+        report.setdefault("timing", {})["gen_s"] = round(time.monotonic() - t_gen, 2)  # 提纲+填充墙钟（流水线重叠）
         candidates = []
         for item in outline.items:
             f = filled.get(item["temp_id"], {})
@@ -305,6 +320,7 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
     # outline+fill 可达十几分钟，若基线取在生成开始，期间用户随手编辑一块就让
     # 整章提交 Conflict、几十次 LLM 调用全部作废；merge 本就是按当前状态设计的
     # （保护块跳过），用 merge 时刻的 revision 既不丢用户并发改动、又不误伤在途生成。
+    t_commit = time.monotonic()
     with _commit_lock(layout, doc_id):
         base_revision = store.data_revision()
         # 失败候选必须交给合并器：保留对应旧块并进报告，不能据此删除（5.7 第 1 条）
@@ -321,7 +337,7 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
         except RevisionConflict as exc:
             report["status"] = "failed"
             report["failures"].append({"stage": "commit", "reason": exc.message})
-            _write_report(layout, doc_id, chapter_id, report)
+            _finish(report)
             raise
 
         # 链接阶段（5.4）：本章块出链与反向索引全量校验（同锁内：link 自带 CAS 提交）
@@ -333,9 +349,10 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
         except Exception as exc:  # 链接失败不影响已提交块
             report["link"] = {"error": str(exc)}
 
+    report.setdefault("timing", {})["commit_s"] = round(time.monotonic() - t_commit, 2)  # 含锁排队+合并+提交+链接
     if report.get("failures") or merge_report.get("failures"):
         report["status"] = "partial"
-    _write_report(layout, doc_id, chapter_id, report)
+    _finish(report)
     return report
 
 

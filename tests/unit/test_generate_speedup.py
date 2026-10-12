@@ -137,3 +137,78 @@ def test_llm_client_caps_inflight_requests(tmp_path):
     assert not any(th.is_alive() for th in threads)
     assert provider.peak <= 2, f"在途请求峰值 {provider.peak} 超过总闸 2"
     assert provider.peak == 2, f"总闸不应把并发钉成串行: peak={provider.peak}"
+
+
+def test_llm_client_stats_track_calls_retries_and_time(tmp_path):
+    """调用遥测：calls/retries/耗时/排队时长必须可统计（报告 timing.llm 的数据源）。"""
+    from src.core.errors import RetryableError
+    from src.core.llm import DummyProvider
+
+    layout = Layout(tmp_path).ensure_base()
+    registry = ModelRegistry(layout)
+    registry.upsert_provider({"id": "dummy", "label": "Dummy", "protocol": "openai_compat",
+                              "base_url": "http://127.0.0.1:1", "api_key": None,
+                              "capabilities": {"json_schema": True, "tools": True,
+                                               "vision": False},
+                              "models": [{"id": "fake", "context_window": 8192,
+                                          "max_output_tokens": 2048,
+                                          "capabilities": {"json_schema": True, "tools": True,
+                                                           "vision": False},
+                                          "pricing": {"input_per_million": 0,
+                                                      "output_per_million": 0,
+                                                      "currency": "USD"}}]})
+    cfg = {"generate": {"models": {"default": "dummy/fake"},
+                        "max_concurrent_requests": 2, "timeout": 30}}
+    provider = DummyProvider([RetryableError("瞬时故障"), {"output": {"ok": 1}}])
+    client = LLMClient(registry, RuntimeDB(layout.runtime_db), cfg,
+                       overrides={"dummy": provider})
+    client.complete("fill", [{"role": "user", "content": "hi"}], schema=None, max_tokens=8)
+    s = client.stats
+    assert s["calls"] == 1, s
+    assert s["retries"] == 1, s
+    assert s["call_seconds"] >= 0 and s["wait_seconds"] >= 0, s
+    assert s["tokens_in"] > 0 and s["tokens_out"] > 0, s
+
+
+def test_generate_report_contains_timing(sample_doc):
+    """生成报告必须带 timing：总耗时/生成墙钟/提交耗时/LLM 遥测——「太慢」要能定位。"""
+    from src.core.llm import DummyProvider
+    from src.core.store import DocStore
+    from src.generate.engine import generate_chapter
+
+    layout, doc_id = sample_doc
+    registry = ModelRegistry(layout)
+    registry.upsert_provider({"id": "dummy", "label": "Dummy", "protocol": "openai_compat",
+                              "base_url": "http://127.0.0.1:1", "api_key": None,
+                              "capabilities": {"json_schema": True, "tools": True,
+                                               "vision": False},
+                              "models": [{"id": "fake", "context_window": 8192,
+                                          "max_output_tokens": 2048,
+                                          "capabilities": {"json_schema": True, "tools": True,
+                                                           "vision": False},
+                                          "pricing": {"input_per_million": 0,
+                                                      "output_per_million": 0,
+                                                      "currency": "USD"}}]})
+    cfg = {"generate": {"models": {"default": "dummy/fake", "outline": "dummy/fake",
+                                   "fill": "dummy/fake"},
+                        "concurrency": 2, "temperature": 0.2, "max_cost_per_chapter": 0.0},
+           "cache": {"dir": "cache/gen"}}
+    store = DocStore(layout, doc_id)
+    anchors = store.anchor_rows("ch01")
+    aid = anchors[1]["anchor_id"]
+    quote = anchors[1]["content"][:20]
+    outline = {"blocks": [
+        {"temp_id": "t1", "type": "definition", "title": "定义一", "basis": "anchored",
+         "sources": [{"anchor_id": aid, "quote": quote, "relation": "defines"}],
+         "depends_on": [], "order": 1}]}
+    fill1 = {"content": "内容 $x$。", "content_format": "md_latex", "tags": [],
+             "sources_patch": [{"anchor_id": aid, "quote": quote, "relation": "defines"}],
+             "basis": "anchored"}
+    client = LLMClient(registry, RuntimeDB(layout.runtime_db), cfg,
+                       overrides={"dummy": DummyProvider([outline, fill1])})
+    report = generate_chapter(doc_id, "ch01", layout=layout, client=client, config=cfg,
+                              registry=registry, force=True, use_cache=False)
+    t = report.get("timing") or {}
+    assert "total_s" in t and "gen_s" in t and "commit_s" in t, t
+    assert isinstance(t.get("llm"), dict) and t["llm"].get("calls", 0) >= 2, t
+    assert t["total_s"] >= 0
