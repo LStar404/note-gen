@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from src.core.block_types import type_enum
 
-PROMPT_VERSION = "1.1.0"   # 1.1.0: OUTLINE_PROMPT 增加章体量自适应；新增 FILL_MANY_PROMPT 批量填充
+PROMPT_VERSION = "1.2.0"   # 1.2.0: 填充篇幅约束（输出 tokens 是生成时长大头，注水直接变慢）
 
 SYSTEM_PROMPT = """你是教材笔记生成助手。你的任务是把教材原文整理成结构化笔记块。
 硬性规则：
@@ -38,7 +38,8 @@ FILL_MANY_PROMPT = """下面是 {n} 个笔记块的定义及各自来源原文�
 - figure：输出图片占位符 ![fig_xxxxxxxx]、图注与解读文字；
 - 返回完整 sources_patch 与 basis；未修改时返回原值，不能省略；修正只用该块实际提供的锚点 id；
 - sources_patch 的 quote 必须**逐字照抄**该块锚点原文中的连续片段（≤300 字）：禁止改写、翻译、加省略号/补标点/合并片段，只截取不改字；
-- 篇幅与块体量相称：短块（图注/链接/动机）数句即可，不得注水；
+- 篇幅克制（直接决定生成速度，禁止注水）：definition/theorem 正文 150-400 字；motivation/figure/link ≤150 字。
+  只写块内容本身，不写背景铺垫、历史评价、教学意义、章节预告；不得复述本块标题；
 <source_data>
 {blocks_fulltexts}
 </source_data>
@@ -51,6 +52,8 @@ FILL_PROMPT = """下面是笔记块 {block_type}「{title}」的定义及其来�
 - figure：输出图片占位符 ![{fig_id}]、图注与解读文字；
 - 返回完整 sources_patch 与 basis；未修改时返回原值，不能省略；修正只用本次实际提供的锚点 id；
 - sources_patch 的 quote 必须**逐字照抄**锚点原文中的连续片段（≤300 字）：禁止改写、翻译、加省略号/补标点/合并片段，只截取不改字；
+- 篇幅克制（直接决定生成速度，禁止注水）：definition/theorem 正文 150-400 字；motivation/figure/link ≤150 字。
+  只写块内容本身，不写背景铺垫、历史评价、教学意义、章节预告；不得复述本块标题；
 <source_data>
 {block_spec_json}
 {source_fulltexts}

@@ -12,25 +12,33 @@ parser:
 chapters_override: []
 generate:
   models:
+    # 填充是机械复述任务：deepseek-flash 实测同题质量持平、时延更短、
+    # 历史成功率 99.5%%（mimo 86%%，失败即重试浪费）——结构提纲仍用 reasoning 模型
+    # 想换回：fill: mimo/mimo-v2.6-flash
     default: mimo/mimo-v2.6-flash
     outline: mimo/mimo-v2.6-flash
-    fill: mimo/mimo-v2.6-flash
+    fill: deepseek/deepseek-flash
     agent: null
     link: null
   outline_max_in: 32000
-  fill_max_in: 8000
+  fill_max_in: 5000
   outline_max_out: 32000
   fill_max_out: 12000
   timeout: 600
-  concurrency: 6
+  concurrency: 10
+  # 小块合批：N 个就绪块一次填充调用（调用数降为 1/N，短块收益最大）；
+  # 批内个别块校验失败自动回退逐块填充兜底。1 = 逐块（旧行为）
+  fill_batch: 3
   # 提纲分批目标（预计输出 token/批）：批越小首批完成越快、填充越早开跑
   # （任务「启动」体感）；实测 MiMo 单批 7k-16k 输出要 3-8 分钟
-  outline_batch_out: 8000
+  outline_batch_out: 6000
   # 整本生成时并行跑几章（写入仍按文档串行，不会互撞）
-  chapter_concurrency: 2
+  chapter_concurrency: 3
   # 全局在途 LLM 请求上限（跨章节/跨任务共享）：防止并行分章把并发一次性
   # 打到「章数 × 章内并发」触发限流，反而被退避拖慢
-  max_concurrent_requests: 8
+  # 遥测显示 wait_seconds=0（并行度没吃满）：上调至 16；
+  # 若上游 429 退避变多则回调
+  max_concurrent_requests: 16
   # 推理深度：low/medium/high（推理型模型思考越深越慢；low 提速明显，
   # 复杂章节若质量不足可改 medium）
   reasoning_effort: low
