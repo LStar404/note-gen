@@ -40,6 +40,11 @@ export default function PdfPane(): ReactElement {
   const viewportRef = useRef<any>(null);
   const [numPages, setNumPages] = useState(0);
   const [scale, setScale] = useState(1.2);
+  // 拖拽平移：默认开启（拖动画面），关掉后恢复文字框选（选区匹配）；中键拖拽始终平移
+  const [panMode, setPanMode] = useState(() => localStorage.getItem("note-gen-pdf-pan") !== "0");
+  const [panning, setPanning] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
   const [textItems, setTextItems] = useState<any[]>([]);
   const [pageLabels, setPageLabels] = useState<string[] | null>(null);
   const [renderKey, setRenderKey] = useState(0);
@@ -217,6 +222,29 @@ export default function PdfPane(): ReactElement {
       .catch((e: Error) => setToast("选区匹配失败：" + e.message));
   };
 
+  const onPointerDown = (e: React.PointerEvent) => {
+    const want = panMode || e.button === 1;
+    const el = scrollRef.current;
+    if (!want || !el) return;
+    dragRef.current = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+    setPanning(true);
+    el.setPointerCapture(e.pointerId);
+    e.preventDefault();          // 平移时抑制文字选择
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    const el = scrollRef.current;
+    if (!d || !el) return;
+    el.scrollLeft = d.left - (e.clientX - d.x);
+    el.scrollTop = d.top - (e.clientY - d.y);
+  };
+  const endPan = (e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    setPanning(false);
+    scrollRef.current?.releasePointerCapture(e.pointerId);
+  };
+
   return (
     <div className="pdf-pane">
       <div className="pdf-toolbar">
@@ -228,8 +256,27 @@ export default function PdfPane(): ReactElement {
         <button onClick={() => setPdfPage(Math.min(numPages, pdfPage + 1))} disabled={pdfPage >= numPages}>下一页</button>
         <button onClick={() => setScale((s) => Math.max(0.5, s - 0.2))}>－</button>
         <button onClick={() => setScale((s) => Math.min(3, s + 0.2))}>＋</button>
+        <button
+          className={panMode ? "primary" : ""}
+          title="拖拽平移开/关：开启时按住拖动画面；关闭后可框选文字做选区匹配（中键拖拽始终平移）"
+          onClick={() =>
+            setPanMode((v) => {
+              localStorage.setItem("note-gen-pdf-pan", v ? "0" : "1");
+              return !v;
+            })
+          }
+        >
+          {panMode ? "🖐 拖拽中" : "🖱 选择中"}
+        </button>
       </div>
-      <div className="pdf-scroll">
+      <div
+        className={"pdf-scroll" + (panMode ? " pan-mode" : "") + (panning ? " panning" : "")}
+        ref={scrollRef}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endPan}
+        onPointerCancel={endPan}
+      >
         <div className="pdf-page" ref={pageRef} onMouseUp={onMouseUp}>
           <canvas ref={canvasRef} />
           <div className="text-layer">

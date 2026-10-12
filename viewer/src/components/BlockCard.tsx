@@ -29,6 +29,7 @@ export default function BlockCard({ block, selected, onSelect }: {
     block.sources.map((src) => (s.anchors[src.anchor_id]?.page ?? "?")).join("|"));
   const pages = sourceKey.split("|");
   const setHighlight = useStore((s) => s.setHighlight);
+  const openZoom = useStore((s) => s.openZoom);
   const setPdfPage = useStore((s) => s.setPdfPage);
   const setToast = useStore((s) => s.setToast);
 
@@ -50,7 +51,13 @@ export default function BlockCard({ block, selected, onSelect }: {
   };
 
   return (
-    <div className={`block-card ${selected ? "selected" : ""}`} onClick={() => onSelect(block.id)}>
+    <div
+      className={`block-card ${selected ? "selected" : ""}`}
+      onClick={() => {
+        onSelect(block.id);
+        openZoom(block.id);   // 点击即放大阅读（小卡片太碎，见 NoteZoom）
+      }}
+    >
       <div className="block-head">
         <span className="block-type">{TYPE_ICON[block.type] ?? "📝"}</span>
         <span className="block-title">{block.title}</span>

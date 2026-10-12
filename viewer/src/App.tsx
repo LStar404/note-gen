@@ -4,6 +4,7 @@ import Toolbar from "./components/Toolbar";
 import PdfPane from "./pdf/PdfPane";
 import NotesPane from "./components/NotesPane";
 import BlockDetailPanel from "./components/BlockDetailPanel";
+import NoteZoom from "./components/NoteZoom";
 import SettingsPanel from "./components/SettingsPanel";
 import SetupGuide from "./components/SetupGuide";
 import ReviewQueue from "./components/ReviewQueue";
@@ -173,6 +174,7 @@ export default function App() {
           <BlockDetailPanel />
         </div>
       </main>
+      <NoteZoom />
       <SettingsPanel />
       <SetupGuide />
       <ReviewQueue />

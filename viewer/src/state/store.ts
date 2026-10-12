@@ -20,6 +20,7 @@ interface Store {
   chapterId: string | null;
   blocks: NoteBlock[];
   selectedBlockId: string | null;
+  zoomBlockId: string | null;
   pdfPage: number;
   selectionHits: any[];
   highlightAnchor: Anchor | null;
@@ -39,6 +40,8 @@ interface Store {
   selectChapter: (chapterId: string) => Promise<void>;
   loadBlocks: () => Promise<void>;
   selectBlock: (blockId: string | null) => void;
+  openZoom: (blockId: string) => void;
+  closeZoom: () => void;
   setPdfPage: (page: number) => void;
   setSelectionHits: (hits: any[]) => void;
   setHighlight: (anchor: Anchor | null) => void;
@@ -58,6 +61,7 @@ export const useStore = create<Store>((set, get) => ({
   chapterId: null,
   blocks: [],
   selectedBlockId: null,
+  zoomBlockId: null,
   pdfPage: 1,
   selectionHits: [],
   highlightAnchor: null,
@@ -91,11 +95,11 @@ export const useStore = create<Store>((set, get) => ({
   selectDoc: async (docId) => {
     const manifest = await api.getManifest(docId);
     const chapterId = manifest.chapters?.[0]?.chapter_id ?? null;
-    set({ docId, manifest, chapterId, blocks: [], selectedBlockId: null, pdfPage: 1 });
+    set({ docId, manifest, chapterId, blocks: [], selectedBlockId: null, zoomBlockId: null, pdfPage: 1 });
     if (chapterId) await get().loadBlocks();
   },
   selectChapter: async (chapterId) => {
-    set({ chapterId, blocks: [], selectedBlockId: null });
+    set({ chapterId, blocks: [], selectedBlockId: null, zoomBlockId: null });
     await get().loadBlocks();
   },
   loadBlocks: async () => {
@@ -105,6 +109,8 @@ export const useStore = create<Store>((set, get) => ({
     set({ blocks: items });
   },
   selectBlock: (blockId) => set({ selectedBlockId: blockId }),
+  openZoom: (blockId) => set({ zoomBlockId: blockId }),
+  closeZoom: () => set({ zoomBlockId: null }),
   setPdfPage: (page) => set({ pdfPage: page }),
   setSelectionHits: (hits) => set({ selectionHits: hits }),
   setHighlight: (anchor) => set({ highlightAnchor: anchor }),
