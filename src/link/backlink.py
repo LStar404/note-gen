@@ -23,7 +23,6 @@ def link_doc(doc_id: str, chapter_id: str | None = None, *, layout: Layout | Non
     chapters = [chapter_id] if chapter_id else store.chapter_ids()
 
     anchors_by_ch = {ch: store.anchor_rows(ch) for ch in store.chapter_ids()}
-    all_anchor_ids = {a["anchor_id"] for rows in anchors_by_ch.values() for a in rows}
     blocks_by_ch = {ch: store.block_rows(ch, include_deleted=True) for ch in store.chapter_ids()}
     all_blocks = [b for rows in blocks_by_ch.values() for b in rows]
 
