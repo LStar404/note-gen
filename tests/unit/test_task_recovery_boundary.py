@@ -55,3 +55,21 @@ def test_list_tasks_endpoint_returns_persisted_records_with_params(workspace):
         assert by_id["task_resume00001"]["status"] == "cancelled"
         resp2 = client.get("/api/v1/tasks", headers=headers)
         assert resp2.status_code == 200, "无 doc_id 过滤也应可用"
+
+
+def test_delete_task_is_hard_delete_without_leftovers(workspace):
+    """删除任务记录必须彻底：get 报不存在、列表无残留（无回收站/软删除）。"""
+    rt = RuntimeDB(workspace.runtime_db)
+    rt.create_task("task_del00000001", "generate",
+                   {"doc_id": "d1", "chapter_id": "ch01"}, doc_id="d1")
+    app = create_app(workspace.root)
+    with TestClient(app, base_url="http://127.0.0.1:8787") as client:
+        headers = {"X-Local-Token": app.state.app_state.token_value}
+        resp = client.delete("/api/v1/tasks/task_del00000001", headers=headers)
+        assert resp.status_code == 200 and resp.json()["deleted"] is True
+        assert client.get("/api/v1/tasks/task_del00000001", headers=headers).status_code == 404, \
+            "删除后任务必须不存在（硬删除）"
+        items = client.get("/api/v1/tasks?doc_id=d1", headers=headers).json()["items"]
+        assert all(t["task_id"] != "task_del00000001" for t in items), "列表不得残留已删记录"
+        resp2 = client.delete("/api/v1/tasks/task_del00000001", headers=headers)
+        assert resp2.status_code == 404, "重复删除应报不存在"

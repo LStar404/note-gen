@@ -93,6 +93,7 @@ export const api = {
   listTasks: (docId?: string | null, limit = 12) =>
     api.get<{ items: any[] }>(
       "/api/v1/tasks?limit=" + limit + (docId ? "&doc_id=" + encodeURIComponent(docId) : "")),
+  deleteTask: (taskId: string) => api.del<any>("/api/v1/tasks/" + taskId),
   models: () => api.get<any>("/api/v1/models"),
   testModel: (body: any) => api.post<any>("/api/v1/models/test", body),
   upsertProvider: (id: string, body: any) => api.put<any>("/api/v1/models/" + id, body),

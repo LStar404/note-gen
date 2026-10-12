@@ -150,7 +150,14 @@ export default function Toolbar() {
   const loadTasks = async () => {
     try {
       const { items } = await api.listTasks(docId);
-      const fresh = (items ?? []).filter((t: any) => t.task_id);
+      // 只显示需要关注的：进行中的 + 可续跑的生成项目（历史噪音不进任务栏）
+      const fresh = (items ?? []).filter(
+        (t: any) =>
+          t.task_id &&
+          (["queued", "running"].includes(t.status) ||
+            (t.kind === "generate" &&
+              ["cancelled", "interrupted", "failed", "partial"].includes(t.status)))
+      );
       setTasks((list) => {
         const seen = new Set(fresh.map((t: any) => t.task_id));
         const locals = list.filter((x) => !seen.has(x.task_id));
@@ -508,6 +515,20 @@ export default function Toolbar() {
                     继续生成
                   </button>
                 )}
+              {!["queued", "running"].includes(t.status) && (
+                <button
+                  className="danger"
+                  title="彻底删除该记录（不保留副本）"
+                  onClick={() =>
+                    void api.deleteTask(t.task_id).then(() => {
+                      setTasks((list) => list.filter((x) => x.task_id !== t.task_id));
+                      setToast("已彻底删除任务记录 " + t.task_id);
+                    })
+                  }
+                >
+                  删除
+                </button>
+              )}
             </div>
           ))}
         </div>

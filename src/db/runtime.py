@@ -136,6 +136,12 @@ class RuntimeDB:
             raise KeyError(task_id)
         return _task_dict(row)
 
+    def delete_task(self, task_id: str) -> bool:
+        """删除任务记录（用户清理不需要的生成项目）。返回是否删除。"""
+        with self._lock, self._conn:
+            cur = self._conn.execute("DELETE FROM tasks WHERE task_id=?", (task_id,))
+            return cur.rowcount > 0
+
     def list_tasks(self, doc_id: str | None = None) -> list[dict]:
         q = "SELECT * FROM tasks"
         args: tuple = ()

@@ -198,6 +198,17 @@ def get_task(request: Request, task_id: str):
         raise NotFound(f"任务不存在: {task_id}")
 
 
+@router.delete("/api/v1/tasks/{task_id}")
+def delete_task(request: Request, task_id: str):
+    """删除任务记录（清理不需要的生成项目）；运行中的先优雅取消再删除。"""
+    st = state(request)
+    try:
+        st.tasks.delete(task_id)
+    except KeyError:
+        raise NotFound(f"任务不存在: {task_id}")
+    return {"deleted": True, "task_id": task_id}
+
+
 @router.post("/api/v1/tasks/{task_id}/cancel")
 def cancel_task(request: Request, task_id: str):
     st = state(request)

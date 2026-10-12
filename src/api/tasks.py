@@ -62,6 +62,26 @@ class TaskManager:
             self._cancel.add(task_id)
         return self.runtime.update_task(task_id, status="cancelled")
 
+    def delete(self, task_id: str) -> bool:
+        """彻底删除任务记录（无回收站、不留副本）：运行中的先置取消，
+        任务行 + 产物文件一并清除。"""
+        task = self.runtime.get_task(task_id)
+        if task.get("status") in ("queued", "running"):
+            with self._lock:
+                self._cancel.add(task_id)
+            self.runtime.update_task(task_id, status="cancelled")
+        with self._lock:
+            self._threads.pop(task_id, None)
+            # 产物文件也是副本：一并删除，不留残余
+            for key in [k for k in list(self._artifacts) if k.startswith(task_id + ":")]:
+                path = self._artifacts.pop(key, None)
+                try:
+                    if path is not None:
+                        Path(path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return self.runtime.delete_task(task_id)
+
     def artifact(self, task_id: str, name: str) -> Path:
         path = self._artifacts.get(f"{task_id}:{name}")
         if path is None or not path.exists():
