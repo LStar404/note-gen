@@ -113,3 +113,28 @@ def test_fill_many_falls_back_to_single_for_missing_item():
                       anchors_by_id={}, anchors=[], model=None, config=cfg, concurrency=2)
     assert filled["t1"]["content"] == "甲" and filled["t2"]["content"] == "乙补", filled
     assert calls[0] == "batch" and calls.count("batch") == 1, calls
+
+
+def test_fill_many_positional_fallback_without_temp_id():
+    """模型偶发漏写 temp_id（实测 4 块全 null）：位置对齐兜底，不得整批回退单块。
+    此 bug 曾让大章节填充调用数爆炸（265 次调用/37 块）并白烧 10 倍输出 tokens。"""
+    calls: list[str] = []
+
+    class Client:
+        def complete(self, task, messages, **kw):
+            calls.append(task)
+            return {"output": {"fills": [
+                {"content": "甲", "content_format": "md_latex", "tags": [],
+                 "sources_patch": [], "basis": "synthesis"},
+                {"content": "乙", "content_format": "md_latex", "tags": [],
+                 "sources_patch": [], "basis": "synthesis"},
+            ]}, "raw_text": "{}", "tool_calls": [], "finish_reason": "stop",
+                "usage": {"in": 1, "out": 1, "estimated": True}, "request_id": "r"}
+
+    cfg = {"generate": {"fill_max_in": 8000, "fill_max_out": 6000, "temperature": 0.2,
+                        "concurrency": 2, "fill_batch": 2}}
+    filled = fill_all(Client(), doc_id="d", chapter_id="ch01",
+                      outline_items=[_spec("t1", "甲"), _spec("t2", "乙")],
+                      anchors_by_id={}, anchors=[], model=None, config=cfg, concurrency=2)
+    assert len(calls) == 1, f"位置对齐兜底应只用一次批量调用: {calls}"
+    assert filled["t1"]["content"] == "甲" and filled["t2"]["content"] == "乙", filled

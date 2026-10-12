@@ -163,10 +163,18 @@ def build_fill_schema(profile: str = "textbook") -> dict:
 
 
 def build_fill_many_schema(profile: str = "textbook") -> dict:
-    """批量填充 schema：一次调用回 fills 数组（每项与单块 schema 一致）。"""
+    """批量填充 schema：一次调用回 fills 数组。
+
+    每项必须带 temp_id（合批按 temp_id 配对回填）——单块 schema 不含它，
+    模型块数一多就会漏写（实测 4 块全部 temp_id=null → 整批回退单块）。
+    """
+    item = build_fill_schema(profile)
+    item = dict(item)
+    item["required"] = ["temp_id"] + [k for k in item.get("required", []) if k != "temp_id"]
+    item["properties"] = {"temp_id": {"type": "string"}, **item.get("properties", {})}
     return {
         "type": "object",
-        "properties": {"fills": {"type": "array", "items": build_fill_schema(profile)}},
+        "properties": {"fills": {"type": "array", "items": item}},
         "required": ["fills"],
         "additionalProperties": False,
     }

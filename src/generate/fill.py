@@ -212,9 +212,12 @@ def fill_many(client: LLMClient, *, doc_id: str, chapter_id: str, specs: list[di
         fills = payload.get("fills") if isinstance(payload, dict) else None
         if not isinstance(fills, list):
             raise SchemaViolation("fills 不是数组")
-        for spec in specs:
+        for i, spec in enumerate(specs):
             item = next((f for f in fills
                          if isinstance(f, dict) and f.get("temp_id") == spec["temp_id"]), None)
+            if item is None and len(fills) == len(specs) and isinstance(fills[i], dict) \
+                    and not fills[i].get("temp_id"):
+                item = fills[i]     # 位置对齐兜底：模型偶发漏写 temp_id（不得整批回退单块）
             if item is None:
                 need_single.append(spec)
                 continue
