@@ -198,8 +198,11 @@ export default function Toolbar() {
       return;
     }
     try {
-      const { task_id } = await api.generate(d, { chapter_id: params.chapter_id ?? null });
-      track(task_id, "generate", { doc_id: d, chapter_id: params.chapter_id ?? null });
+      const { task_id } = await api.generate(d, {
+        chapter_id: params.chapter_id ?? null,
+        name: t.name || undefined,          // 续跑保留原任务名
+      });
+      track(task_id, "generate", { doc_id: d, chapter_id: params.chapter_id ?? null }, t.name || undefined);
       setToast("已继续生成：已完成的块自动复用，只补未完成部分");
     } catch (e: any) {
       setToast("继续生成失败：" + e.message);
@@ -248,14 +251,15 @@ export default function Toolbar() {
   const doGenerate = async () => {
     if (!docId) return;
     try {
-      const { task_id } = await api.generate(docId, { chapter_id: chapterId });
+      const custom = genName.trim();
+      const { task_id } = await api.generate(docId, { chapter_id: chapterId, name: custom || undefined });
       const st = useStore.getState();
       const docTitle = st.docs.find((d) => d.doc_id === docId)?.title ?? docId;
       const chTitle = (st.manifest?.chapters ?? []).find(
         (c: any) => c.chapter_id === chapterId)?.title;
       track(task_id, "generate", { doc_id: docId, chapter_id: chapterId },
-        docTitle + " · " + (chTitle ?? chapterId ?? "整本"));
-      setToast("生成任务已启动：" + task_id);
+        custom || (docTitle + " · " + (chTitle ?? chapterId ?? "整本")));
+      setToast("生成任务已启动：" + (custom || task_id));
     } catch (e: any) {
       setToast("生成失败：" + e.message);
     }
@@ -278,6 +282,7 @@ export default function Toolbar() {
   const [theme, setTheme] = useState<string>(
     () => localStorage.getItem("note-gen-theme") || "light"
   );
+  const [genName, setGenName] = useState("");   // 生成任务手动命名（可选）
   const [deleted, setDeleted] = useState<null | {
     title: string;
     removed: Record<string, number>;
@@ -413,6 +418,14 @@ export default function Toolbar() {
         </button>
       )}
 
+      <input
+        className="gen-name"
+        value={genName}
+        onChange={(e) => setGenName(e.target.value)}
+        placeholder="任务名（可选）"
+        title="给这次生成起个名字（如「期末复习重点章」）；留空则自动用「书名 · 章节名」"
+        style={{ width: 130 }}
+      />
       <button onClick={doGenerate}>生成本章</button>
       <button onClick={() => void doExport("md")}>导出 md</button>
       <button onClick={() => void doExport("tex")}>导出 tex</button>
