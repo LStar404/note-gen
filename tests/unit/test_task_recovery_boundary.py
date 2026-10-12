@@ -32,3 +32,26 @@ def test_server_startup_recovers_stale_tasks(workspace):
         pass
     rt = RuntimeDB(workspace.runtime_db)
     assert rt.get_task(tid)["status"] == "interrupted", "启动时应恢复遗留任务"
+
+
+def test_list_tasks_endpoint_returns_persisted_records_with_params(workspace):
+    """任务列表（供「继续生成」续跑）：记录与 request 参数必须持久可取。"""
+    rt = RuntimeDB(workspace.runtime_db)
+    t1 = rt.create_task("task_resume00001", "generate",
+                        {"doc_id": "d1", "chapter_id": "ch01"}, doc_id="d1")
+    rt.update_task(t1["task_id"], status="cancelled")
+    rt.create_task("task_resume00002", "generate",
+                   {"doc_id": "d1", "chapter_id": None}, doc_id="d1")
+    app = create_app(workspace.root)
+    with TestClient(app, base_url="http://127.0.0.1:8787") as client:
+        headers = {"X-Local-Token": app.state.app_state.token_value}
+        resp = client.get("/api/v1/tasks?doc_id=d1", headers=headers)
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        by_id = {t["task_id"]: t for t in items}
+        assert "task_resume00001" in by_id and "task_resume00002" in by_id
+        assert by_id["task_resume00001"]["request"] == {"doc_id": "d1", "chapter_id": "ch01"}, \
+            "续跑参数必须原样可取"
+        assert by_id["task_resume00001"]["status"] == "cancelled"
+        resp2 = client.get("/api/v1/tasks", headers=headers)
+        assert resp2.status_code == 200, "无 doc_id 过滤也应可用"

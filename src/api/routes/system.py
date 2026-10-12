@@ -181,6 +181,14 @@ def trigger_export(request: Request, body: dict):
     return JSONResponse({"task_id": task["task_id"]}, status_code=202)
 
 
+@router.get("/api/v1/tasks")
+def list_tasks(request: Request, doc_id: str | None = None, limit: int = 20):
+    """最近任务（持久化于 runtime.db）：刷新/重启后恢复任务记录与续跑入口。"""
+    st = state(request)
+    items = st.runtime.list_tasks(doc_id=doc_id)
+    return {"items": items[: max(1, min(int(limit), 100))]}
+
+
 @router.get("/api/v1/tasks/{task_id}")
 def get_task(request: Request, task_id: str):
     st = state(request)

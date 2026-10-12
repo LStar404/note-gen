@@ -90,6 +90,9 @@ export const api = {
   exportDoc: (body: any) => api.post<{ task_id: string }>("/api/v1/export", body),
   getTask: (taskId: string) => api.get<any>("/api/v1/tasks/" + taskId),
   cancelTask: (taskId: string) => api.post<any>("/api/v1/tasks/" + taskId + "/cancel"),
+  listTasks: (docId?: string | null, limit = 12) =>
+    api.get<{ items: any[] }>(
+      "/api/v1/tasks?limit=" + limit + (docId ? "&doc_id=" + encodeURIComponent(docId) : "")),
   models: () => api.get<any>("/api/v1/models"),
   testModel: (body: any) => api.post<any>("/api/v1/models/test", body),
   upsertProvider: (id: string, body: any) => api.put<any>("/api/v1/models/" + id, body),

@@ -108,10 +108,11 @@ export default function Toolbar() {
     }
   };
 
-  // 任务进度/取消（9.2 /tasks/{id}）
-  const track = (taskId: string, kind: string) => {
-    setTasks((list) => [...list, { task_id: taskId, kind, status: "queued", progress: {},
-                                   startedAt: Date.now(), bestPct: 0 }]);
+  // 任务进度/取消（9.2 /tasks/{id}）；params 供「继续生成」续跑（doc_id/chapter_id）
+  const pollingRef = useRef<Set<string>>(new Set());
+  const pollTask = (taskId: string, kind: string) => {
+    if (pollingRef.current.has(taskId)) return;   // 同一任务只挂一个轮询器
+    pollingRef.current.add(taskId);
     const timer = window.setInterval(async () => {
       try {
         const t = await api.getTask(taskId);
@@ -124,20 +125,89 @@ export default function Toolbar() {
         if (["succeeded", "failed", "partial", "cancelled", "interrupted"].includes(t.status)) {
           window.clearInterval(timer);
           timersRef.current.delete(timer);
+          pollingRef.current.delete(taskId);
           refreshAfterTask(kind, t);
         }
       } catch {
         window.clearInterval(timer);
         timersRef.current.delete(timer);
+        pollingRef.current.delete(taskId);
       }
     }, 1000);
     timersRef.current.add(timer);
+  };
+
+  const track = (taskId: string, kind: string, params?: any) => {
+    setTasks((list) => [
+      ...list.filter((x) => x.task_id !== taskId),
+      { task_id: taskId, kind, status: "queued", progress: {}, params: params ?? null,
+        startedAt: Date.now(), bestPct: 0 },
+    ]);
+    pollTask(taskId, kind);
+  };
+
+  // 持久任务恢复（runtime.db）：刷新/重启后任务记录不丢，未完任务自动续挂轮询
+  const loadTasks = async () => {
+    try {
+      const { items } = await api.listTasks(docId);
+      const fresh = (items ?? []).filter((t: any) => t.task_id);
+      setTasks((list) => {
+        const seen = new Set(fresh.map((t: any) => t.task_id));
+        const locals = list.filter((x) => !seen.has(x.task_id));
+        const merged = fresh.map((t: any) => {
+          const old = list.find((x) => x.task_id === t.task_id);
+          return {
+            task_id: t.task_id,
+            kind: t.kind,
+            status: t.status,
+            progress: t.progress ?? {},
+            params: t.request ?? old?.params ?? null,
+            error: t.error ?? old?.error,
+            bestPct: old?.bestPct ?? 0,
+            startedAt: old?.startedAt ?? (Date.parse(t.created_at ?? "") || Date.now()),
+          };
+        });
+        return [...locals, ...merged];
+      });
+      for (const t of fresh) {
+        if (["queued", "running"].includes(t.status)) pollTask(t.task_id, t.kind);
+      }
+    } catch {
+      /* 列表失败不阻塞主界面 */
+    }
+  };
+
+  const statusLabel = (t: any) =>
+    ({ queued: "排队中", running: "运行中", succeeded: "完成", partial: "部分完成",
+       failed: "失败", interrupted: "已中断",
+       cancelled: t.kind === "generate" ? "已暂停" : "已取消" } as Record<string, string>)[t.status] ?? t.status;
+
+  const resumeGenerate = async (t: any) => {
+    const params = t.params ?? t.request ?? {};
+    const d = params.doc_id ?? null;
+    if (!d) {
+      setToast("缺少任务参数，无法续跑");
+      return;
+    }
+    try {
+      const { task_id } = await api.generate(d, { chapter_id: params.chapter_id ?? null });
+      track(task_id, "generate", { doc_id: d, chapter_id: params.chapter_id ?? null });
+      setToast("已继续生成：已完成的块自动复用，只补未完成部分");
+    } catch (e: any) {
+      setToast("继续生成失败：" + e.message);
+    }
   };
 
   useEffect(() => {
     void loadDocs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 切换教材/刷新页面：从持久层恢复任务记录（中断的生成保留在列表里，可续跑）
+  useEffect(() => {
+    void loadTasks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docId]);
 
   // 脏草稿守卫（7.3）：切章/换教材必须提示，不能静默丢弃
   const guardDirty = (): boolean => {
@@ -171,7 +241,7 @@ export default function Toolbar() {
     if (!docId) return;
     try {
       const { task_id } = await api.generate(docId, { chapter_id: chapterId });
-      track(task_id, "generate");
+      track(task_id, "generate", { doc_id: docId, chapter_id: chapterId });
       setToast("生成任务已启动：" + task_id);
     } catch (e: any) {
       setToast("生成失败：" + e.message);
@@ -393,7 +463,7 @@ export default function Toolbar() {
               title={t.error?.message ?? ""}
             >
               <span>
-                {t.kind} · {t.status}
+                {t.kind} · {statusLabel(t)}
                 {["queued", "running"].includes(t.status) && t.startedAt
                   ? " · 已运行 " + fmtElapsed(Date.now() - t.startedAt)
                   : ""}
@@ -419,13 +489,25 @@ export default function Toolbar() {
               )}
               {["queued", "running"].includes(t.status) && (
                 <button
-                  onClick={() =>
-                    void api.cancelTask(t.task_id).then(() => setToast("已请求取消 " + t.task_id))
-                  }
+                  onClick={() => {
+                    if (t.kind === "generate") {
+                      // 暂停 = 优雅取消：引擎会把已产出结果落缓存，续跑时自动复用
+                      void api.cancelTask(t.task_id).then(() =>
+                        setToast("已暂停：进度已保存，点「继续生成」接着跑（已完成的块自动复用）"));
+                    } else {
+                      void api.cancelTask(t.task_id).then(() => setToast("已请求取消 " + t.task_id));
+                    }
+                  }}
                 >
-                  取消
+                  {t.kind === "generate" ? "暂停" : "取消"}
                 </button>
               )}
+              {t.kind === "generate" &&
+                ["cancelled", "interrupted", "failed", "partial"].includes(t.status) && (
+                  <button className="primary" onClick={() => void resumeGenerate(t)}>
+                    继续生成
+                  </button>
+                )}
             </div>
           ))}
         </div>
