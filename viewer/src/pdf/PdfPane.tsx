@@ -32,6 +32,7 @@ export default function PdfPane(): ReactElement {
   const highlight = useStore((s) => s.highlightAnchor);
   const selectionHits = useStore((s) => s.selectionHits);
   const setSelectionHits = useStore((s) => s.setSelectionHits);
+  const setHighlight = useStore((s) => s.setHighlight);
   const setToast = useStore((s) => s.setToast);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -42,6 +43,9 @@ export default function PdfPane(): ReactElement {
   const [scale, setScale] = useState(1.2);
   // 拖拽平移：默认开启（拖动画面），关掉后恢复文字框选（选区匹配）；中键拖拽始终平移
   const [panMode, setPanMode] = useState(() => localStorage.getItem("note-gen-pdf-pan") !== "0");
+  // 文档代次：加载完成 +1，驱动重绘效果（仅靠 docId 会在切换教材时漏触发——
+  // 加载是异步的，等它完成时 pdfPage 已被重置为 1，依赖未变、画布残留旧教材）
+  const [docGen, setDocGen] = useState(0);
   const [panning, setPanning] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
@@ -62,6 +66,16 @@ export default function PdfPane(): ReactElement {
       }
       docRef.current = null;
     }
+    // 切换教材即刻清空旧画面/文本层/高亮：不得把上一本教材的页留在预览里
+    setTextItems([]);
+    setPageLabels(null);
+    setHighlight(null);
+    setSelectionHits([]);
+    viewportRef.current = null;
+    if (canvasRef.current) {
+      canvasRef.current.width = 0;
+      canvasRef.current.height = 0;
+    }
     (async () => {
       const task = pdfjs.getDocument({
         url: api.pdfUrl(docId),
@@ -79,6 +93,7 @@ export default function PdfPane(): ReactElement {
         return;
       }
       docRef.current = doc;
+      setDocGen((g) => g + 1);   // 文档就绪：驱动重绘（pdfPage 未变时唯一的重绘触发源）
       setNumPages(doc.numPages);
       try {
         const labels = await doc.getPageLabels();
@@ -153,7 +168,7 @@ export default function PdfPane(): ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [docId, pdfPage, scale]);
+  }, [docId, pdfPage, scale, docGen]);
 
   // 翻页联动（6.3/7.3）：预取前后各 1 页
   useEffect(() => {
