@@ -75,3 +75,31 @@ def test_delete_task_is_hard_delete_without_leftovers(workspace):
         assert all(t["task_id"] != "task_del00000001" for t in items), "列表不得残留已删记录"
         resp2 = client.delete("/api/v1/tasks/task_del00000001", headers=headers)
         assert resp2.status_code == 404, "重复删除应报不存在"
+
+
+def test_resume_reuses_same_task_record(workspace):
+    """续跑必须原记录原地跑（同 task_id、名字保留），不得另开一条。"""
+    import time as _time
+
+    from src.api.tasks import TaskManager
+
+    rt = RuntimeDB(workspace.runtime_db)
+    rt.create_task("task_same0000001", "generate",
+                   {"doc_id": "d1", "chapter_id": "ch01"},
+                   doc_id="d1", name="我的任务")
+    rt.update_task("task_same0000001", status="cancelled")
+    tm = TaskManager(rt)
+    done = {"ok": False}
+
+    def fn(req, progress, is_cancelled, register_artifact, task_id=None):
+        done["ok"] = True
+        return {"partial": False}
+
+    t = tm.resume("task_same0000001", fn, {"doc_id": "d1", "chapter_id": "ch01"})
+    assert t["task_id"] == "task_same0000001", "续跑必须复用原任务记录"
+    assert t["name"] == "我的任务", "任务名随记录保留"
+    for _ in range(60):
+        if done["ok"] and rt.get_task("task_same0000001")["status"] == "succeeded":
+            break
+        _time.sleep(0.05)
+    assert rt.get_task("task_same0000001")["status"] == "succeeded"

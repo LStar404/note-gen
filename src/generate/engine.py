@@ -16,7 +16,7 @@ from src.core.paths import Layout
 from src.core.store import DocStore
 from src.core.text import utc_now_iso
 
-from .cache import cache_key, model_fingerprint, read_cache, write_cache
+from .cache import cache_key, model_fingerprint, read_cache, read_cache_any, write_cache
 from .fill import fill_all
 from .merge import merge_candidates
 from .outline import generate_outline
@@ -120,6 +120,7 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
                      client: LLMClient | None = None, config: dict | None = None,
                      registry: ModelRegistry | None = None, model: str | None = None,
                      force: bool = False, use_cache: bool = True, merge_mode: str = "merge",
+                     resume: bool = False,
                      task_id: str | None = None,
                      progress: Callable[[dict], None] | None = None,
                      is_cancelled: Callable[[], bool] | None = None) -> dict:
@@ -178,6 +179,12 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
     cached = None
     if use_cache and not force:
         cached = read_cache(layout, doc_id, chapter_id, key)
+    if cached is None and resume:
+        # 续跑语义：无视缓存键差异（换模型/升级提示词不该让 115/117 重烧），
+        # 吃掉该章已有缓存里的完成块，只补失败/缺失部分
+        cached = read_cache_any(layout, doc_id, chapter_id)
+        if cached is not None:
+            report["resumed"] = True
 
     if cached is not None:
         report["cache_hit"] = True

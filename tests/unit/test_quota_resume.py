@@ -96,3 +96,45 @@ def test_quota_circuit_breaker_stops_further_calls(tmp_path):
     except QuotaExhausted:
         pass
     assert len(provider.calls) == n_calls, "熔断后不得再打上游 API"
+
+
+def test_resume_reuses_ok_blocks_across_cache_key_change(sample_doc):
+    """续跑语义：换模型/换参数（缓存键失配）也必须复用已完成块、只补缺口。
+    曾经 115/117 已完成却整章重烧。"""
+    layout, doc_id = sample_doc
+    registry = _provider_for(layout)
+    store = DocStore(layout, doc_id)
+    anchors = store.anchor_rows("ch01")
+    aid = anchors[1]["anchor_id"]
+    quote = anchors[1]["content"][:20]
+    outline = {"blocks": [
+        {"temp_id": "t1", "type": "definition", "title": "定义一", "basis": "anchored",
+         "sources": [{"anchor_id": aid, "quote": quote, "relation": "defines"}],
+         "depends_on": [], "order": 1},
+        {"temp_id": "t2", "type": "motivation", "title": "动机二", "basis": "synthesis",
+         "sources": [], "depends_on": [], "order": 2}]}
+    fill1 = {"content": "第一块内容。", "content_format": "md_latex", "tags": [],
+             "sources_patch": [{"anchor_id": aid, "quote": quote, "relation": "defines"}],
+             "basis": "anchored"}
+    fill2 = {"content": "第二块内容。", "content_format": "md_latex", "tags": [],
+             "sources_patch": [], "basis": "synthesis"}
+
+    # 第一次：t1 成功、t2 配额中断（断点快照落缓存）
+    client1 = LLMClient(registry, RuntimeDB(layout.runtime_db), CFG,
+                        overrides={"dummy": DummyProvider([outline, fill1,
+                                                           QuotaExhausted("配额已用尽")])})
+    r1 = generate_chapter(doc_id, "ch01", layout=layout, client=client1, config=CFG,
+                          registry=registry, force=True, use_cache=True)
+    assert r1["status"] == "paused", r1
+
+    # 第二次：温度不同 → 缓存键不同（模拟换模型/升提示词），resume=True 仍须复用
+    cfg2 = {**CFG, "generate": {**CFG["generate"], "temperature": 0.9}}
+    client2 = LLMClient(registry, RuntimeDB(layout.runtime_db), cfg2,
+                        overrides={"dummy": DummyProvider([fill2])})
+    r2 = generate_chapter(doc_id, "ch01", layout=layout, client=client2, config=cfg2,
+                          registry=registry, resume=True)
+    assert r2.get("resumed") is True, r2
+    blocks = {b["title"]: b for b in store.block_rows("ch01")}
+    assert "定义一" in blocks and "动机二" in blocks, list(blocks)
+    assert blocks["定义一"]["content"] == "第一块内容。", "已完成块必须原样复用（不得重填）"
+

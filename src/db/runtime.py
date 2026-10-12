@@ -143,6 +143,15 @@ class RuntimeDB:
             raise KeyError(task_id)
         return _task_dict(row)
 
+    def reset_task(self, task_id: str) -> dict:
+        """续跑复位：状态回排队、清空错误/结果/进度；保留 name 与 request。"""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE tasks SET status='queued', error_json=NULL, result_json=NULL, "
+                "progress_json='{}', updated_at=? WHERE task_id=?",
+                (utc_now_iso(), task_id))
+        return self.get_task(task_id)
+
     def delete_task(self, task_id: str) -> bool:
         """删除任务记录（用户清理不需要的生成项目）。返回是否删除。"""
         with self._lock, self._conn:

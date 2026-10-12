@@ -94,6 +94,7 @@ export const api = {
     api.get<{ items: any[] }>(
       "/api/v1/tasks?limit=" + limit + (docId ? "&doc_id=" + encodeURIComponent(docId) : "")),
   deleteTask: (taskId: string) => api.del<any>("/api/v1/tasks/" + taskId),
+  resumeTask: (taskId: string) => api.post<any>("/api/v1/tasks/" + taskId + "/resume", {}),
   models: () => api.get<any>("/api/v1/models"),
   testModel: (body: any) => api.post<any>("/api/v1/models/test", body),
   upsertProvider: (id: string, body: any) => api.put<any>("/api/v1/models/" + id, body),

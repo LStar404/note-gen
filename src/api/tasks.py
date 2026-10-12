@@ -63,6 +63,19 @@ class TaskManager:
             self._cancel.add(task_id)
         return self.runtime.update_task(task_id, status="cancelled")
 
+    def resume(self, task_id: str, fn: Callable[..., dict], request: dict) -> dict:
+        """续跑：复用原任务记录（同 task_id，名字/参数不变），不新开记录。"""
+        task = self.runtime.get_task(task_id)
+        if task.get("status") in ("queued", "running"):
+            return task
+        self.runtime.reset_task(task_id)
+        thread = threading.Thread(target=self._run, args=(task_id, fn, request), daemon=True)
+        with self._lock:
+            self._cancel.discard(task_id)
+            self._threads[task_id] = thread
+        thread.start()
+        return self.get(task_id)
+
     def delete(self, task_id: str) -> bool:
         """彻底删除任务记录（无回收站、不留副本）：运行中的先置取消，
         任务行 + 产物文件一并清除。"""

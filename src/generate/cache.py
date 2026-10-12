@@ -65,6 +65,21 @@ def read_cache(layout: Layout, doc_id: str, chapter_id: str, key: str) -> dict |
     return data if data.get("cache_key") == key else None
 
 
+def read_cache_any(layout: Layout, doc_id: str, chapter_id: str) -> dict | None:
+    """续跑专用：无视 cache_key 差异读取该章已有缓存。
+
+    换模型/升级提示词会让键失配而整体作废缓存——但「继续生成」的语义是
+    吃掉已完成的块、只补缺口：115/117 不该因为换模型重烧一遍。
+    """
+    path = layout.cache_file(doc_id, chapter_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def write_cache(layout: Layout, doc_id: str, chapter_id: str, key: str, payload: dict) -> None:
     """缓存存未分配最终 block_id 的候选集 N（含 temp_id 与依赖）。"""
     path = layout.cache_file(doc_id, chapter_id)

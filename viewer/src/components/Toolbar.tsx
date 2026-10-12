@@ -191,19 +191,13 @@ export default function Toolbar() {
        cancelled: t.kind === "generate" ? "已暂停" : "已取消" } as Record<string, string>)[t.status] ?? t.status;
 
   const resumeGenerate = async (t: any) => {
-    const params = t.params ?? t.request ?? {};
-    const d = params.doc_id ?? null;
-    if (!d) {
-      setToast("缺少任务参数，无法续跑");
-      return;
-    }
     try {
-      const { task_id } = await api.generate(d, {
-        chapter_id: params.chapter_id ?? null,
-        name: t.name || undefined,          // 续跑保留原任务名
-      });
-      track(task_id, "generate", { doc_id: d, chapter_id: params.chapter_id ?? null }, t.name || undefined);
-      setToast("已继续生成：已完成的块自动复用，只补未完成部分");
+      // 原记录原地续跑（同 task_id/名字，不开新记录）：引擎吃掉已完成的块、只补缺口
+      await api.resumeTask(t.task_id);
+      setTasks((list) =>
+        list.map((x) => (x.task_id === t.task_id ? { ...x, status: "queued", error: null } : x)));
+      pollTask(t.task_id, "generate");
+      setToast("继续生成：复用已完成的块，只补未完成部分");
     } catch (e: any) {
       setToast("继续生成失败：" + e.message);
     }

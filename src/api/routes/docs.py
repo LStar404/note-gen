@@ -392,14 +392,12 @@ def search(request: Request, doc_id: str, q: str, mode: str = "fts"):
     }
 
 
-@router.post("/api/v1/docs/{doc_id}/generate")
-def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
-    """触发章节再生成（异步任务）；固定走 5.7 合并策略。"""
-    st = state(request)
-    body = body or {}
-    chapter_id = body.get("chapter_id")
-    model = body.get("model")
+def _build_generate_run(st, doc_id: str, chapter_id, model, resume: bool = False):
+    """生成任务执行体（触发与续跑共用）。
 
+    resume=True：吃掉该章已有缓存的完成块、只补缺口（换模型/升级提示词
+    不让已完成的 115/117 重烧），并复用原任务记录（同 task_id）。
+    """
     def run(req, progress, is_cancelled, register_artifact, task_id=None):
         from src.generate.engine import generate_chapter
 
@@ -452,7 +450,7 @@ def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
             try:
                 return generate_chapter(doc_id, ch, layout=st.layout, client=st.client,
                                         config=st.config, registry=st.registry, model=model,
-                                        merge_mode="merge", task_id=task_id,
+                                        merge_mode="merge", resume=resume, task_id=task_id,
                                         progress=make_progress(ch), is_cancelled=is_cancelled)
             except TaskCancelled:
                 raise
@@ -496,6 +494,17 @@ def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
         return {"reports": reports,
                 "partial": any(r.get("status") != "complete" for r in reports)}
 
+    return run
+
+
+@router.post("/api/v1/docs/{doc_id}/generate")
+def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
+    """触发章节再生成（异步任务）；固定走 5.7 合并策略。"""
+    st = state(request)
+    body = body or {}
+    chapter_id = body.get("chapter_id")
+    model = body.get("model")
+
     # 防重复触发：同文档已有排队/运行中的生成任务时直接复用（避免重复烧钱）。
     # 收紧为文档级而非章节级：两个生成任务并跑 = 两个写者抢 data_revision（I7 单写者），
     # 后提交者必 RevisionConflict，白烧一章的 LLM 费用（probe3 实测两任务并跑）。
@@ -514,6 +523,29 @@ def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
     except Exception:
         task_name = doc_id + (" · " + chapter_id if chapter_id else "")
     task_name = custom_name or task_name
+    run = _build_generate_run(st, doc_id, chapter_id, model)
     task = st.tasks.submit("generate", run, {"doc_id": doc_id, "chapter_id": chapter_id},
                            doc_id=doc_id, idempotency_key=None, name=task_name)
     return JSONResponse({"task_id": task["task_id"]}, status_code=202)
+
+
+@router.post("/api/v1/tasks/{task_id}/resume")
+def resume_generate_task(request: Request, task_id: str):
+    """续跑生成任务：复用原任务记录（同 task_id/名字），引擎只补缺口。"""
+    st = state(request)
+    try:
+        task = st.tasks.get(task_id)
+    except KeyError:
+        raise NotFound(f"任务不存在: {task_id}")
+    if task.get("kind") != "generate":
+        raise InputError("仅生成任务支持续跑", code="NOT_RESUMABLE")
+    if task.get("status") in ("queued", "running"):
+        return JSONResponse({"task_id": task_id, "status": task.get("status")}, status_code=202)
+    req = task.get("request") or {}
+    doc_id = req.get("doc_id")
+    chapter_id = req.get("chapter_id")
+    if not doc_id:
+        raise InputError("任务缺少文档参数，无法续跑", code="NOT_RESUMABLE")
+    run = _build_generate_run(st, doc_id, chapter_id, None, resume=True)
+    t = st.tasks.resume(task_id, run, {"doc_id": doc_id, "chapter_id": chapter_id})
+    return JSONResponse({"task_id": t["task_id"], "resumed": True}, status_code=202)
