@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import {
+  applyAppearance,
+  BG_PRESETS,
+  loadAppearance,
+  MOTION_LEVELS,
+  saveAppearance,
+  type Appearance,
+} from "../lib/appearance";
 import { useStore } from "../state/store";
 
 const EMPTY_PROVIDER = {
@@ -32,6 +40,15 @@ export default function SettingsPanel() {
   const [usage, setUsage] = useState<any | null>(null);
   const [testResult, setTestResult] = useState<string>("");
   const [addingProvider, setAddingProvider] = useState<any | null>(null);
+  const [appearance, setAppearance] = useState<Appearance>(() => loadAppearance());
+
+  // 外观即时生效 + 持久化（选色/换背景所见即所得）
+  const updateAppearance = (patch: Partial<Appearance>) => {
+    const next = { ...appearance, ...patch };
+    setAppearance(next);
+    saveAppearance(next);
+    applyAppearance(next);
+  };
 
   const reload = async () => {
     const d = await api.models();
@@ -125,6 +142,51 @@ export default function SettingsPanel() {
     <div className="modal-mask" onClick={() => setOpen(false)}>
       <div className="modal wide" onClick={(e) => e.stopPropagation()}>
         <h2>设置</h2>
+
+        {/* ---------------- 外观 ---------------- */}
+        <h3>外观</h3>
+        <div className="bg-presets">
+          {BG_PRESETS.map(([id, label]) => (
+            <button
+              key={id}
+              className={"bg-swatch" + (appearance.bg === id ? " active" : "")}
+              onClick={() => updateAppearance({ bg: id })}
+              title={label}
+            >
+              <i className={"bg-thumb bg-" + id} />
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="form-grid">
+          <label>
+            <span>自定义纯色（选「纯色」背景时生效）</span>
+            <input
+              type="color"
+              value={appearance.bgColor}
+              onChange={(e) => updateAppearance({ bgColor: e.target.value })}
+            />
+          </label>
+          <label>
+            <span>自定义图片 URL（选「图片」背景时生效）</span>
+            <input
+              value={appearance.bgImage}
+              placeholder="https://…/bg.jpg，或 data:…/base64"
+              onChange={(e) => updateAppearance({ bgImage: e.target.value })}
+            />
+          </label>
+          <label>
+            <span>动态效果</span>
+            <select
+              value={appearance.motion}
+              onChange={(e) => updateAppearance({ motion: e.target.value as Appearance["motion"] })}
+            >
+              {MOTION_LEVELS.map(([v, label]) => (
+                <option key={v} value={v}>{label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
 
         {/* ---------------- 通用设置 ---------------- */}
         <h3>通用设置</h3>
