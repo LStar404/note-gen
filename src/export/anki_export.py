@@ -110,14 +110,28 @@ def collect_cards(store: DocStore, chapter_id: str | None = None) -> list[dict]:
 
 def rewrite_figures_plain(content: str, figure_paths: dict[str, str],
                           figure_captions: dict[str, str]) -> str:
-    """卡片内图占位符降级为纯文本图注（Anki 资源另行打包，避免断链）。"""
+    """卡片内图占位符降级为纯文本图注（Anki 资源另行打包，避免断链）。
+    数学/代码区不改写（与 render.rewrite_figures 同规则）。"""
     import re as _re
 
     def repl(m: _re.Match) -> str:
         fig_id = m.group(1)
         return f"［图：{figure_captions.get(fig_id, figure_paths.get(fig_id, fig_id))}］"
 
-    return _re.sub(r"!\[(fig_\d{8})\]", repl, content)
+    protected: list[str] = []
+
+    def stash(m: _re.Match) -> str:
+        protected.append(m.group(0))
+        return chr(0) + str(len(protected) - 1) + chr(0)
+
+    from .render import CODE_FENCE, MATH_REGION
+
+    text = CODE_FENCE.sub(stash, content)
+    text = MATH_REGION.sub(stash, text)
+    text = _re.sub(r"!\[(fig_\d{8})\]", repl, text)
+    for i, raw in enumerate(protected):
+        text = text.replace(chr(0) + str(i) + chr(0), raw)
+    return text
 
 
 def export_anki(store: DocStore, chapter_id: str | None = None, *, out_dir: Path,

@@ -52,6 +52,20 @@ def test_anki_math_protected_from_markdown_and_lt_escaped():
     assert "&lt;" in out, out
 
 
+def test_figure_rewrite_skips_math_and_code():
+    """代码里演示占位符语法、公式里的占位符文本不得被改写成真图片链接。
+    （rewrite_citations 一直护数学/代码区，rewrite_figures 此前没护——同类问题。）"""
+    from src.export.render import rewrite_figures
+
+    content = ("正文 ![fig_00000100] 正文\n\n" + chr(96) * 3 + "\n演示 ![fig_00000100] 语法\n" + chr(96) * 3
+               + "\n\n$![fig_00000100]$")
+    out = rewrite_figures(content, doc_id="d", mode="export",
+                          figure_paths={"fig_00000100": "data/d/figures/fig_00000100.png"})
+    assert out.count("](data/d/figures/fig_00000100.png)") == 1, out  # 只有正文那处被改写
+    assert "演示 ![fig_00000100]" in out, out
+    assert "$![fig_00000100]$" in out, out
+
+
 def test_anki_back_html_escapes_lt():
     block = {"content": "条件 \u005c(R<\u005cinfty\u005c) 成立\n第二行", "sources": []}
     h = _back_html(block, {})

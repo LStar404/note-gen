@@ -109,7 +109,11 @@ def heading_line(anchor: dict | None) -> str | None:
 
 def rewrite_figures(content: str, *, doc_id: str, mode: str, figure_paths: dict[str, str],
                     figure_captions: dict[str, str] | None = None) -> str:
-    """图占位符重写：Viewer 用 API URL，导出用磁盘相对路径（7.4 两条规则不得混用）。"""
+    """图占位符重写：Viewer 用 API URL，导出用磁盘相对路径（7.4 两条规则不得混用）。
+
+    数学/代码区先遮蔽（与 rewrite_citations 同规则）：代码里演示占位符语法、
+    公式里出现占位符文本时不得被改写成真图片链接。
+    """
     figure_captions = figure_captions or {}
 
     def repl(m: re.Match) -> str:
@@ -120,7 +124,18 @@ def rewrite_figures(content: str, *, doc_id: str, mode: str, figure_paths: dict[
             return f"![{caption}]({url})"
         return f"![{caption}]({figure_paths.get(fig_id, fig_id)})"
 
-    return FIG_ANY.sub(repl, content)
+    protected: list[str] = []
+
+    def stash(m: re.Match) -> str:
+        protected.append(m.group(0))
+        return chr(0) + str(len(protected) - 1) + chr(0)
+
+    text = CODE_FENCE.sub(stash, content)
+    text = MATH_REGION.sub(stash, text)
+    text = FIG_ANY.sub(repl, text)
+    for i, raw in enumerate(protected):
+        text = text.replace(chr(0) + str(i) + chr(0), raw)
+    return text
 
 
 def rewrite_citations(content: str, refs_by_num: dict[int, dict], *, mode: str) -> str:
