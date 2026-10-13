@@ -655,7 +655,10 @@ export default function Toolbar() {
                 {["queued", "running"].includes(t.status) && t.startedAt
                   ? " · 已运行 " + fmtElapsed(Date.now() - t.startedAt)
                   : ""}
-                {t.progress?.stage ? " · " + progressText(t.progress) : ""}
+                {/* 终态不再挂阶段文案：曾出现「部分完成 · 完成」的自相矛盾 */}
+                {!["succeeded", "partial", "failed"].includes(t.status) && t.progress?.stage
+                  ? " · " + progressText(t.progress)
+                  : ""}
                 {t.status === "failed" && t.error?.message ? " · " + t.error.message : ""}
               </span>
               {["queued", "running"].includes(t.status) &&
@@ -673,6 +676,11 @@ export default function Toolbar() {
               {t.status === "succeeded" && (
                 <div className="progress" title="100%">
                   <i style={{ width: "100%" }} />
+                </div>
+              )}
+              {t.status === "partial" && (
+                <div className="progress" title="部分块待审核">
+                  <i style={{ width: (t.bestPct ?? 90) + "%" }} />
                 </div>
               )}
               <div className="task-actions">
