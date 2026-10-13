@@ -35,6 +35,20 @@ def _caption_for(bboxes: list[dict], img_bbox: list[float]) -> str:
     return "图"
 
 
+def pick_ref_target(scored: list[tuple[float, int, str]]) -> str | None:
+    """从 (纵向间距, 破平级, figure_id) 候选挑图；歧义不猜（前端优雅降级）。
+
+    歧义 = 与次近候选同破平级且间距差 <60pt：两图都贴着源锚点，猜错就把笔记
+    改指到错误插图。原判定误用 [:2] 比较要求间距完全相等，歧义几乎永不触发。
+    """
+    if not scored:
+        return None
+    ranked = sorted(scored)
+    if len(ranked) > 1 and ranked[1][1] == ranked[0][1] and ranked[1][0] - ranked[0][0] < 60:
+        return None
+    return ranked[0][2]
+
+
 def refresh_figures(pdf_path: Path, layout: Layout, doc_id: str,
                     *, parser_python: str | None = None) -> list[dict]:
     """抽取内嵌图 → figures/ + pages JSON figure 块整体重写。

@@ -36,6 +36,11 @@ class TaskManager:
         return self.get(task_id)
 
     def _run(self, task_id: str, fn: Callable, request: dict) -> None:
+        if task_id in self._cancel:
+            # 取消抢在本线程起步之前：不得再写 running 把 cancelled 真实结局覆盖掉
+            self.runtime.update_task(task_id, status="cancelled",
+                                     error={"message": "任务已取消"})
+            return
         self.runtime.update_task(task_id, status="running", progress={"stage": "start"})
         try:
             result = fn(request, progress=lambda p: self.runtime.update_task(task_id, progress=p),
@@ -43,7 +48,11 @@ class TaskManager:
                         register_artifact=lambda name, path: self._artifacts.__setitem__(f"{task_id}:{name}", Path(path)),
                         task_id=task_id)
             status = "partial" if result.get("partial") else "succeeded"
-            if self.get(task_id).get("status") != "cancelled":
+            try:
+                current = self.get(task_id).get("status")
+            except KeyError:
+                current = None      # 任务已被彻底删除：行没了，无需写结局
+            if current != "cancelled":
                 # 取消后 fn 仍正常返回时不改写结局：cancelled 是真实结局
                 self.runtime.update_task(task_id, status=status, result=result,
                                          progress={"stage": "done"})
@@ -68,7 +77,8 @@ class TaskManager:
         task = self.runtime.get_task(task_id)
         if task.get("status") in ("queued", "running"):
             return task
-        self.runtime.reset_task(task_id)
+        if not self.runtime.reset_task(task_id):
+            return self.get(task_id)   # 原子认领失败=并发续跑已拿走/任务已删除
         thread = threading.Thread(target=self._run, args=(task_id, fn, request), daemon=True)
         with self._lock:
             self._cancel.discard(task_id)

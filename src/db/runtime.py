@@ -134,7 +134,12 @@ class RuntimeDB:
         values.append(task_id)
         with self._lock, self._conn:
             self._conn.execute(f"UPDATE tasks SET {', '.join(fields)} WHERE task_id=?", values)
-        return self.get_task(task_id)
+        try:
+            return self.get_task(task_id)
+        except KeyError:
+            # 行已被彻底删除（删除运行中任务后 worker 的进度/收尾写入还在路上）：
+            # 更新落空即可，不得抛 KeyError 炸穿 worker 线程
+            return {}
 
     def get_task(self, task_id: str) -> dict:
         with self._lock:
@@ -143,14 +148,18 @@ class RuntimeDB:
             raise KeyError(task_id)
         return _task_dict(row)
 
-    def reset_task(self, task_id: str) -> dict:
-        """续跑复位：状态回排队、清空错误/结果/进度；保留 name 与 request。"""
+    def reset_task(self, task_id: str) -> bool:
+        """续跑复位（原子认领）：状态回排队、清空错误/结果/进度；保留 name 与 request。
+
+        只允许非排队/运行中的任务被认领，返回是否认领成功——两个并发续跑只有一个
+        能拿到（双击「继续生成」不得双跑双倍烧钱）。"""
         with self._lock, self._conn:
-            self._conn.execute(
+            cur = self._conn.execute(
                 "UPDATE tasks SET status='queued', error_json=NULL, result_json=NULL, "
-                "progress_json='{}', updated_at=? WHERE task_id=?",
+                "progress_json='{}', updated_at=? "
+                "WHERE task_id=? AND status NOT IN ('queued','running')",
                 (utc_now_iso(), task_id))
-        return self.get_task(task_id)
+            return cur.rowcount > 0
 
     def delete_task(self, task_id: str) -> bool:
         """删除任务记录（用户清理不需要的生成项目）。返回是否删除。"""

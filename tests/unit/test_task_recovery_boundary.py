@@ -103,3 +103,96 @@ def test_resume_reuses_same_task_record(workspace):
             break
         _time.sleep(0.05)
     assert rt.get_task("task_same0000001")["status"] == "succeeded"
+
+
+def test_delete_running_task_worker_survives(workspace):
+    """删除运行中任务后，worker 的进度/收尾写入不得抛 KeyError 炸穿线程。
+    （update_task 曾以 get_task 收尾，删行即 KeyError，连 _run 的异常兜底里都会再炸。）"""
+    import threading
+
+    from src.api.tasks import TaskManager
+
+    rt = RuntimeDB(workspace.runtime_db)
+    tm = TaskManager(rt)
+    started, release = threading.Event(), threading.Event()
+    errors: list = []
+    crashed: list = []
+    prev_hook = threading.excepthook
+    threading.excepthook = lambda args: crashed.append(args)
+    try:
+        def fn(request, progress, is_cancelled, register_artifact, task_id=None):
+            started.set()
+            release.wait(10)
+            try:
+                progress({"stage": "late"})          # 行已删：必须容忍
+            except Exception as exc:                  # noqa: BLE001
+                errors.append(exc)
+            return {"partial": False}
+
+        task = tm.submit("generate", fn, {})
+        thread = tm._threads[task["task_id"]]
+        assert started.wait(10)
+        tm.delete(task["task_id"])
+        release.set()
+        thread.join(10)
+        assert not thread.is_alive()
+        assert not errors, f"删行后进度写入不得抛错: {errors}"
+        assert not crashed, f"worker 线程不得裸崩: {crashed}"
+    finally:
+        threading.excepthook = prev_hook
+
+
+def test_reset_task_claim_is_atomic(workspace):
+    """续跑认领原子性：排队/运行中的任务不得被再次认领（双击续跑防双跑双倍烧钱）。"""
+    rt = RuntimeDB(workspace.runtime_db)
+    rt.create_task("task_claim000001", "generate", {"doc_id": "d1"}, doc_id="d1")
+    rt.update_task("task_claim000001", status="failed")
+    assert rt.reset_task("task_claim000001") is True, "已结束任务可认领"
+    assert rt.reset_task("task_claim000001") is False, "排队中不得被再次认领"
+    rt.update_task("task_claim000001", status="succeeded")
+    assert rt.reset_task("task_claim000001") is True, "已结束任务可续跑"
+    assert rt.reset_task("task_claim00000000-missing") is False, "不存在的任务认领失败而非抛错"
+
+
+def test_resume_double_click_starts_only_one(workspace):
+    """并发续跑同一任务只能真正启动一次。"""
+    import threading
+    import time
+
+    from src.api.tasks import TaskManager
+
+    rt = RuntimeDB(workspace.runtime_db)
+    rt.create_task("task_dbl00000001", "generate", {"doc_id": "d1"}, doc_id="d1")
+    rt.update_task("task_dbl00000001", status="failed")
+    tm = TaskManager(rt)
+    runs: list = []
+    gate = threading.Barrier(2)
+
+    def fn(req, progress, is_cancelled, register_artifact, task_id=None):
+        runs.append(1)
+        time.sleep(0.2)
+        return {"partial": False}
+
+    def racer():
+        gate.wait(10)
+        try:
+            tm.resume("task_dbl00000001", fn, {"doc_id": "d1"})
+        except KeyError:
+            pass
+
+    threads = [threading.Thread(target=racer) for _ in range(2)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(10)
+    time.sleep(0.5)
+    assert len(runs) == 1, f"并发续跑只能起一个: {len(runs)}"
+
+
+def test_cancel_unknown_task_is_404(workspace):
+    """取消不存在的任务应 404（曾裸 KeyError → 500）。"""
+    app = create_app(workspace.root)
+    with TestClient(app, base_url="http://127.0.0.1:8787") as client:
+        headers = {"X-Local-Token": app.state.app_state.token_value}
+        resp = client.post("/api/v1/tasks/task_ghost000001/cancel", headers=headers)
+        assert resp.status_code == 404, resp.text

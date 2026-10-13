@@ -157,8 +157,9 @@ def refresh_figures_api(request: Request, doc_id: str, body: dict | None = None)
     import re
 
     from src.anchor.chunker import chunk_and_anchor
+    from src.core.errors import RevisionConflict
     from src.core.text import utc_now_iso
-    from src.ingest.figures import refresh_figures
+    from src.ingest.figures import pick_ref_target, refresh_figures
 
     st = state(request)
     store = DocStore(st.layout, doc_id)
@@ -175,7 +176,7 @@ def refresh_figures_api(request: Request, doc_id: str, body: dict | None = None)
     # 既有笔记的悬空图片引用修复：源锚点同页恰有一张图 → 改指真实 id
     fig_dir = st.layout.figures_dir(doc_id)
     pages_dir = st.layout.ingest_root / doc_id / "pages"
-    fig_by_page: dict[int, set[str]] = {}
+    fig_by_page: dict[int, list[tuple[str, list]]] = {}
     for pf in pages_dir.glob("*.json"):
         try:
             d = json.loads(pf.read_text(encoding="utf-8"))
@@ -193,50 +194,59 @@ def refresh_figures_api(request: Request, doc_id: str, body: dict | None = None)
         """锚点与图的纵向间距（重叠为 0）：源文本通常紧贴所引插图。"""
         return max(0.0, float(f[1]) - float(a[3]), float(a[1]) - float(f[3]))
     for ch in store.chapter_ids():
-        rows = [dict(b) for b in store.block_rows(ch, include_deleted=True)]
-        anchors_by_id = {a["anchor_id"]: a for a in store.anchor_rows(ch)}
-        history = []
-        changed = False
-        for b in rows:
-            if b.get("deleted_at"):
-                continue
-            content = b.get("content") or ""
-            refs = ref_re.findall(content)
-            unresolved = [r for r in set(refs) if not (fig_dir / f"{r}.png").exists()]
-            if not unresolved:
-                continue
-            src_anchors = [anchors_by_id.get(a.get("anchor_id"), {})
-                           for a in (b.get("sources") or [])]
-            primary_page = next((a.get("page") for a in src_anchors if a.get("page")), None)
-            scored: list[tuple[float, int, str]] = []
-            for pg in {a.get("page") for a in src_anchors}:
-                if not pg:
+        for attempt in range(2):
+            # CAS 基线取在读取时刻（I7/11.6.3 丢更新防线）：基线取在提交时刻时，
+            # 读-改-写窗口内的并发改动会被整文件替换静默冲掉；现在冲突即整章重做一次
+            base_rev = store.data_revision()
+            rows = [dict(b) for b in store.block_rows(ch, include_deleted=True)]
+            anchors_by_id = {a["anchor_id"]: a for a in store.anchor_rows(ch)}
+            history = []
+            changed = False
+            n_patched = 0
+            for b in rows:
+                if b.get("deleted_at"):
                     continue
-                same_page = [a for a in src_anchors if a.get("page") == pg and a.get("bbox")]
-                for fid, fbbox in fig_by_page.get(int(pg), []):
-                    gaps = [_vgap(a["bbox"], fbbox) for a in same_page]
-                    if gaps:
-                        # 只在同页锚点间比距离（跨页坐标不可比）；首选来源页破平
-                        scored.append((min(gaps), 0 if pg == primary_page else 1, fid))
-            scored.sort()
-            # 与次近差距 <60pt（且同破平级）视为歧义，不猜（前端优雅降级）
-            if not scored:
-                continue
-            if len(scored) > 1 and scored[1][:2] == scored[0][:2] and scored[1][0] - scored[0][0] < 60:
-                continue
-            real = scored[0][2]
-            for r in unresolved:
-                content = content.replace(f"![{r}]", f"![{real}]")
-            if content != b["content"]:
-                b["content"] = content
-                b["revision"] = int(b["revision"]) + 1
-                b["updated_at"] = now
-                history.append(store.make_history_row(b, "ai", "图片引用修复", now))
-                changed = True
-                patched += 1
-        if changed:
-            store.commit(DocMutation(blocks={ch: rows}, history=history),
-                         base_revision=store.data_revision(), sync_backlinks=True)
+                content = b.get("content") or ""
+                refs = ref_re.findall(content)
+                unresolved = [r for r in set(refs) if not (fig_dir / f"{r}.png").exists()]
+                if not unresolved:
+                    continue
+                src_anchors = [anchors_by_id.get(a.get("anchor_id"), {})
+                               for a in (b.get("sources") or [])]
+                primary_page = next((a.get("page") for a in src_anchors if a.get("page")), None)
+                scored: list[tuple[float, int, str]] = []
+                for pg in {a.get("page") for a in src_anchors}:
+                    if not pg:
+                        continue
+                    same_page = [a for a in src_anchors if a.get("page") == pg and a.get("bbox")]
+                    for fid, fbbox in fig_by_page.get(int(pg), []):
+                        gaps = [_vgap(a["bbox"], fbbox) for a in same_page]
+                        if gaps:
+                            # 只在同页锚点间比距离（跨页坐标不可比）；首选来源页破平
+                            scored.append((min(gaps), 0 if pg == primary_page else 1, fid))
+                # 歧义（同破平级且与次近差距 <60pt）不猜——判定收进 figures.pick_ref_target
+                real = pick_ref_target(scored)
+                if real is None:
+                    continue
+                for r in unresolved:
+                    content = content.replace(f"![{r}]", f"![{real}]")
+                if content != b["content"]:
+                    b["content"] = content
+                    b["revision"] = int(b["revision"]) + 1
+                    b["updated_at"] = now
+                    history.append(store.make_history_row(b, "ai", "图片引用修复", now))
+                    changed = True
+                    n_patched += 1
+            if not changed:
+                break
+            try:
+                store.commit(DocMutation(blocks={ch: rows}, history=history),
+                             base_revision=base_rev, sync_backlinks=True)
+                patched += n_patched
+                break
+            except RevisionConflict:
+                if attempt == 1:
+                    raise
     return {"figures": len(figs), "patched_blocks": patched}
 
 
@@ -547,5 +557,8 @@ def resume_generate_task(request: Request, task_id: str):
     if not doc_id:
         raise InputError("任务缺少文档参数，无法续跑", code="NOT_RESUMABLE")
     run = _build_generate_run(st, doc_id, chapter_id, None, resume=True)
-    t = st.tasks.resume(task_id, run, {"doc_id": doc_id, "chapter_id": chapter_id})
+    try:
+        t = st.tasks.resume(task_id, run, {"doc_id": doc_id, "chapter_id": chapter_id})
+    except KeyError:      # get 与 resume 之间被并发删除
+        raise NotFound(f"任务不存在: {task_id}")
     return JSONResponse({"task_id": t["task_id"], "resumed": True}, status_code=202)

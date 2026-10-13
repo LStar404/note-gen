@@ -218,7 +218,10 @@ def delete_task(request: Request, task_id: str):
 @router.post("/api/v1/tasks/{task_id}/cancel")
 def cancel_task(request: Request, task_id: str):
     st = state(request)
-    return st.tasks.cancel(task_id)
+    try:
+        return st.tasks.cancel(task_id)
+    except KeyError:
+        raise NotFound(f"任务不存在: {task_id}")
 
 
 @router.get("/api/v1/tasks/{task_id}/artifacts/{name}")
