@@ -209,14 +209,8 @@ export default function Toolbar() {
   const loadTasks = async () => {
     try {
       const { items } = await api.listTasks(docId);
-      // 只显示需要关注的：进行中的 + 可续跑的生成项目（历史噪音不进任务栏）
-      const fresh = (items ?? []).filter(
-        (t: any) =>
-          t.task_id &&
-          (["queued", "running"].includes(t.status) ||
-            (t.kind === "generate" &&
-              ["cancelled", "interrupted", "failed", "partial"].includes(t.status)))
-      );
+      // 全部任务都显示（用户要求）：不需要的记录用「删除」清理
+      const fresh = (items ?? []).filter((t: any) => t.task_id);
       setTasks((list) => {
         const seen = new Set(fresh.map((t: any) => t.task_id));
         const locals = list.filter((x) => !seen.has(x.task_id));
@@ -359,6 +353,26 @@ export default function Toolbar() {
   const [exportOpen, setExportOpen] = useState(false);
   const [expFormat, setExpFormat] = useState("md");
   const [expScope, setExpScope] = useState<"book" | "chapter">("book");
+  // 教材改名
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameText, setRenameText] = useState("");
+  const doRename = async () => {
+    if (!docId) return;
+    const title = renameText.trim();
+    if (!title) {
+      setToast("名称不能为空");
+      return;
+    }
+    try {
+      await api.renameDoc(docId, title);
+      await loadDocs();
+      useStore.setState({ manifest: { ...(useStore.getState().manifest ?? {}), title } });
+      setRenameOpen(false);
+      setToast("已改名：" + title);
+    } catch (e: any) {
+      setToast("改名失败：" + e.message);
+    }
+  };
 
   // 生成记录（9.2 报告透传）：各章生成时间/模型/结果
   const openRecords = async () => {
@@ -409,6 +423,17 @@ export default function Toolbar() {
           <option key={d.doc_id} value={d.doc_id}>{d.title}</option>
         ))}
       </select>
+      {docId && (
+        <button
+          title="给这本教材改名（只改显示名称，不影响内容）"
+          onClick={() => {
+            setRenameText(manifest?.title ?? docs.find((d) => d.doc_id === docId)?.title ?? "");
+            setRenameOpen(true);
+          }}
+        >
+          改名
+        </button>
+      )}
 
       <select
         value={chapterId ?? ""}
@@ -706,6 +731,26 @@ export default function Toolbar() {
               );
             })}
             <button onClick={() => setRecords(null)}>关闭</button>
+          </div>
+        </div>
+      )}
+      {renameOpen && (
+        <div className="modal-mask" onClick={() => setRenameOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>教材改名</h2>
+            <input
+              className="gen-name"
+              style={{ width: "100%" }}
+              value={renameText}
+              onChange={(e) => setRenameText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void doRename()}
+              placeholder="教材名称"
+              autoFocus
+            />
+            <div className="export-actions">
+              <button onClick={() => setRenameOpen(false)}>取消</button>
+              <button className="primary" onClick={() => void doRename()}>保存</button>
+            </div>
           </div>
         </div>
       )}

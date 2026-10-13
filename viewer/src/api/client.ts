@@ -52,6 +52,8 @@ export const api = {
   getManifest: (docId: string) => api.get<any>("/api/v1/docs/" + docId),
   deleteDoc: (docId: string) =>
     api.del<any>("/api/v1/docs/" + docId, { confirmed: true }),
+  renameDoc: (docId: string, title: string) =>
+    api.post<{ doc_id: string; title: string }>("/api/v1/docs/" + docId + "/rename", { title }),
   rebuildDoc: (docId: string) => api.post<{ task_id: string; doc_id: string }>(
     "/api/v1/docs/" + docId + "/rebuild", {}),
   refreshFigures: (docId: string) => api.post<{ figures: number; patched_blocks: number }>(

@@ -256,6 +256,26 @@ def get_doc(request: Request, doc_id: str):
     return DocStore(st.layout, doc_id).manifest()
 
 
+@router.post("/api/v1/docs/{doc_id}/rename")
+def rename_doc(request: Request, doc_id: str, body: dict):
+    """教材改名（只改 manifest.title，解析产物与笔记不动；走提交机制保单写者）。"""
+    from src.core.store import DocMutation
+
+    st = state(request)
+    title = str((body or {}).get("title") or "").strip()
+    if not title:
+        raise InputError("名称不能为空")
+    if len(title) > 200:
+        raise InputError("名称不能超过 200 字")
+    if not st.layout.manifest(doc_id).exists():
+        raise NotFound(f"文档不存在: {doc_id}")
+    store = DocStore(st.layout, doc_id)
+    base = store.data_revision()
+    store.commit(DocMutation(manifest_updates={"title": title}),
+                 base_revision=base, sync_backlinks=False)
+    return {"doc_id": doc_id, "title": title}
+
+
 @router.delete("/api/v1/docs/{doc_id}")
 def delete_doc(request: Request, doc_id: str, body: dict | None = None):
     """删除教材（移入回收站，可恢复）。需 confirmed=true 显式确认（4.1 文档事实源）。"""
