@@ -401,13 +401,22 @@ select:focus, input:focus, textarea:focus {
 .review-row { border-bottom: 1px solid var(--border); padding: 11px 0; }
 
 /* ---------------- 任务托盘 / 提示 ---------------- */
-.task-tray { flex-basis: 100%; display: flex; gap: 8px; flex-wrap: wrap; padding-top: 4px; font-size: 12px; }
-.task-row {
-  display: flex; gap: 8px; align-items: center; background: var(--accent-soft);
-  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
-  border-radius: 999px; padding: 4px 12px; font-weight: 600; max-width: 100%;
+/* 任务托盘：行全宽定轨——文字弹性吸收每秒的进度/计时变化，按钮组钉在右侧固定轨位，
+   不再随任务文字/条目增删到处滑动；托盘限高滚动，任务多少都不挤动工具栏与正文 */
+.task-tray {
+  flex-basis: 100%; display: flex; flex-direction: column; gap: 6px;
+  padding-top: 4px; font-size: 12px; max-height: 32vh; overflow-y: auto;
 }
-.task-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 460px; }
+.task-row {
+  display: flex; gap: 10px; align-items: center; width: 100%; background: var(--accent-soft);
+  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 10px; padding: 5px 12px; font-weight: 600;
+}
+.task-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0; }
+.task-actions {
+  margin-left: auto; flex: none; display: flex; gap: 6px; justify-content: flex-end;
+  width: 176px;   /* 定宽轨位：按钮数量切换也不挪窝 */
+}
 /* 任务进度条（生成/导入过程可视化） */
 .progress {
   width: 132px; height: 7px; border-radius: 999px; overflow: hidden;

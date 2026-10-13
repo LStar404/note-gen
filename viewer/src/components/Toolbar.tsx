@@ -195,7 +195,10 @@ export default function Toolbar() {
       // 原记录原地续跑（同 task_id/名字，不开新记录）：引擎吃掉已完成的块、只补缺口
       await api.resumeTask(t.task_id);
       setTasks((list) =>
-        list.map((x) => (x.task_id === t.task_id ? { ...x, status: "queued", error: null } : x)));
+        list.map((x) => (x.task_id === t.task_id
+          // 计时重置：「已运行」只算本次运行，不再把暂停时长混进去
+          ? { ...x, status: "queued", error: null, startedAt: Date.now() }
+          : x)));
       pollTask(t.task_id, "generate");
       setToast("继续生成：复用已完成的块，只补未完成部分");
     } catch (e: any) {
@@ -507,41 +510,43 @@ export default function Toolbar() {
                   <i style={{ width: "100%" }} />
                 </div>
               )}
-              {["queued", "running"].includes(t.status) && (
-                <button
-                  onClick={() => {
-                    if (t.kind === "generate") {
-                      // 暂停 = 优雅取消：引擎会把已产出结果落缓存，续跑时自动复用
-                      void api.cancelTask(t.task_id).then(() =>
-                        setToast("已暂停：进度已保存，点「继续生成」接着跑（已完成的块自动复用）"));
-                    } else {
-                      void api.cancelTask(t.task_id).then(() => setToast("已请求取消 " + t.task_id));
-                    }
-                  }}
-                >
-                  {t.kind === "generate" ? "暂停" : "取消"}
-                </button>
-              )}
-              {t.kind === "generate" &&
-                ["cancelled", "interrupted", "failed", "partial"].includes(t.status) && (
-                  <button className="primary" onClick={() => void resumeGenerate(t)}>
-                    继续生成
+              <div className="task-actions">
+                {["queued", "running"].includes(t.status) && (
+                  <button
+                    onClick={() => {
+                      if (t.kind === "generate") {
+                        // 暂停 = 优雅取消：引擎会把已产出结果落缓存，续跑时自动复用
+                        void api.cancelTask(t.task_id).then(() =>
+                          setToast("已暂停：进度已保存，点「继续生成」接着跑（已完成的块自动复用）"));
+                      } else {
+                        void api.cancelTask(t.task_id).then(() => setToast("已请求取消 " + t.task_id));
+                      }
+                    }}
+                  >
+                    {t.kind === "generate" ? "暂停" : "取消"}
                   </button>
                 )}
-              {!["queued", "running"].includes(t.status) && (
-                <button
-                  className="danger"
-                  title="彻底删除该记录（不保留副本）"
-                  onClick={() =>
-                    void api.deleteTask(t.task_id).then(() => {
-                      setTasks((list) => list.filter((x) => x.task_id !== t.task_id));
-                      setToast("已彻底删除任务记录 " + t.task_id);
-                    })
-                  }
-                >
-                  删除
-                </button>
-              )}
+                {t.kind === "generate" &&
+                  ["cancelled", "interrupted", "failed", "partial"].includes(t.status) && (
+                    <button className="primary" onClick={() => void resumeGenerate(t)}>
+                      继续生成
+                    </button>
+                  )}
+                {!["queued", "running"].includes(t.status) && (
+                  <button
+                    className="danger"
+                    title="彻底删除该记录（不保留副本）"
+                    onClick={() =>
+                      void api.deleteTask(t.task_id).then(() => {
+                        setTasks((list) => list.filter((x) => x.task_id !== t.task_id));
+                        setToast("已彻底删除任务记录 " + t.task_id);
+                      })
+                    }
+                  >
+                    删除
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
