@@ -51,6 +51,15 @@ export const api = {
   listDocs: () => api.get<{ docs: DocSummary[] }>("/api/v1/docs"),
   blockTypes: () => api.get<{ profile: string; types: any[]; presets: string[]; custom: any[] }>(
     "/api/v1/block-types"),
+  qbankList: (docId: string) =>
+    api.get<{ count: number; entries: any[] }>("/api/v1/docs/" + docId + "/qbank"),
+  qbankUpload: (docId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.post<{ added: number; count: number; file: string }>(
+      "/api/v1/docs/" + docId + "/qbank", form);
+  },
+  quiz: (docId: string, body: any) => api.post<any>("/api/v1/docs/" + docId + "/quiz", body),
   openPath: (path: string) => api.post<{ ok: boolean; path: string }>(
     "/api/v1/system/open-path", { path }),
   getManifest: (docId: string) => api.get<any>("/api/v1/docs/" + docId),

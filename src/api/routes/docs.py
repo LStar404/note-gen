@@ -289,6 +289,71 @@ def rename_doc(request: Request, doc_id: str, body: dict):
     return {"doc_id": doc_id, "title": title}
 
 
+@router.get("/api/v1/docs/{doc_id}/qbank")
+def qbank_list(request: Request, doc_id: str):
+    """参考题库（用户上传的课后习题/往年题）：条目列表与数量。"""
+    st = state(request)
+    if not st.layout.manifest(doc_id).exists():
+        raise NotFound(f"文档不存在: {doc_id}")
+    from src.generate.quiz import load_qbank
+
+    entries = load_qbank(st.layout.doc_dir(doc_id))
+    return {"count": len(entries), "entries": entries[:200]}
+
+
+@router.post("/api/v1/docs/{doc_id}/qbank")
+async def qbank_upload(request: Request, doc_id: str, file: UploadFile = File(...)):
+    """上传参考题目（PDF/txt/md）：按段落入题库，供出题时定向风格/考点。"""
+    st = state(request)
+    if not st.layout.manifest(doc_id).exists():
+        raise NotFound(f"文档不存在: {doc_id}")
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in (".pdf", ".txt", ".md"):
+        raise InputError("题库只支持 PDF / txt / md")
+    data = await file.read()
+    if not data:
+        raise InputError("文件为空")
+    import tempfile
+
+    from src.generate.quiz import append_qbank, extract_qbank_entries, read_qbank_file
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
+        tf.write(data)
+        tmp = Path(tf.name)
+    try:
+        text = read_qbank_file(tmp)
+    finally:
+        tmp.unlink(missing_ok=True)
+    entries = extract_qbank_entries(file.filename or "upload", text)
+    if not entries:
+        raise InputError("没有从文件中识别出可用的题目段落")
+    added = append_qbank(st.layout.doc_dir(doc_id), entries)
+    return {"added": added, "count": len(entries), "file": file.filename}
+
+
+@router.post("/api/v1/docs/{doc_id}/quiz")
+def quiz_generate(request: Request, doc_id: str, body: dict):
+    """AI 出题：基于笔记内容出练习题（题库样本定向风格）；同步返回题目与答案。"""
+    from src.core.store import DocStore as _DS
+    from src.generate.quiz import generate_quiz, load_qbank
+
+    st = state(request)
+    if not st.layout.manifest(doc_id).exists():
+        raise NotFound(f"文档不存在: {doc_id}")
+    store = _DS(st.layout, doc_id)
+    chapter_id = (body or {}).get("chapter_id")
+    chapters = [chapter_id] if chapter_id else [c["chapter_id"] for c in store.manifest().get("chapters", [])]
+    kinds = (body or {}).get("kinds") or ["choice", "short"]
+    count = int((body or {}).get("count") or 10)
+    difficulty = str((body or {}).get("difficulty") or "期末水平")
+    models = (st.config.get("generate", {}).get("models", {}) or {})
+    model = models.get("quiz") or models.get("fill")
+    quiz = generate_quiz(st.client, store=store, chapter_ids=chapters, kinds=kinds,
+                         count=count, difficulty=difficulty, model=model,
+                         config=st.config, qbank=load_qbank(st.layout.doc_dir(doc_id)))
+    return quiz
+
+
 @router.post("/api/v1/docs/{doc_id}/append")
 async def append_pdf(request: Request, doc_id: str, file: UploadFile = File(...)):
     """追加讲义：把新 PDF 接到现有教材尾部（老师逐份发放的讲义场景）。

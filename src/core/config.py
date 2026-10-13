@@ -24,7 +24,9 @@ DEFAULTS: dict[str, Any] = {
             "agent": None,
             "link": None,
             "ocr": None,   # 视觉补 OCR 用（需 vision 能力）；空则自动选 fill/default 里有视觉能力的
+            "quiz": None,  # AI 出题用；空则用 fill/default
         },
+        "quiz_max_out": 8000,   # 出题单次输出上限
         "outline_max_in": 32000,
         "fill_max_in": 8000,
         "outline_max_out": 32000,

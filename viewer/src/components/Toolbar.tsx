@@ -435,6 +435,52 @@ export default function Toolbar() {
   const [expScope, setExpScope] = useState<"book" | "chapter">("book");
   // 导出完成提示：文件在哪 + 一键打开文件夹
   const [exportResult, setExportResult] = useState<{ files: string[]; dir: string } | null>(null);
+  // AI 出题：选项 + 结果 + 参考题库
+  const [quizOpen, setQuizOpen] = useState(false);
+  const [quizBusy, setQuizBusy] = useState(false);
+  const [quiz, setQuiz] = useState<any | null>(null);
+  const [quizKinds, setQuizKinds] = useState<string[]>(["choice", "short"]);
+  const [quizCount, setQuizCount] = useState(10);
+  const [quizDifficulty, setQuizDifficulty] = useState("期末水平");
+  const [quizScope, setQuizScope] = useState<"book" | "chapter">("chapter");
+  const [qbankCount, setQbankCount] = useState(0);
+  const [showAnswers, setShowAnswers] = useState<Record<string, boolean>>({});
+
+  const openQuiz = async () => {
+    if (!docId) return;
+    setQuizOpen(true);
+    setQuiz(null);
+    setShowAnswers({});
+    try {
+      const r = await api.qbankList(docId);
+      setQbankCount(r.count ?? 0);
+    } catch {
+      setQbankCount(0);
+    }
+  };
+
+  const runQuiz = async () => {
+    if (!docId) return;
+    if (!quizKinds.length) {
+      setToast("至少选一种题型");
+      return;
+    }
+    setQuizBusy(true);
+    try {
+      const r = await api.quiz(docId, {
+        chapter_id: quizScope === "chapter" ? chapterId : undefined,
+        kinds: quizKinds,
+        count: quizCount,
+        difficulty: quizDifficulty,
+      });
+      setQuiz(r);
+      setShowAnswers({});
+    } catch (e: any) {
+      setToast("出题失败：" + e.message);
+    } finally {
+      setQuizBusy(false);
+    }
+  };
   // 全书生成选项弹窗：跳过已生成章节（默认）/ 全量重生成
   const [bookOpen, setBookOpen] = useState(false);
   const [regenAll, setRegenAll] = useState(false);
@@ -625,6 +671,10 @@ export default function Toolbar() {
       <button className="primary" onClick={() => setExportOpen(true)}
               title="导出笔记：Markdown / LaTeX / Obsidian / Anki，可选整本或当前章节">
         导出
+      </button>
+      <button onClick={() => void openQuiz()}
+              title="AI 出题：按笔记出练习题（可上传往年题/课后习题定向风格，期末备考）">
+        AI 出题
       </button>
       <button onClick={() => void openReview(true)} title="审核 AI 生成的笔记块（needs_review）">
         待审核
@@ -847,6 +897,120 @@ export default function Toolbar() {
               );
             })}
             <button onClick={() => setRecords(null)}>关闭</button>
+          </div>
+        </div>
+      )}
+      {quizOpen && (
+        <div className="modal-mask" onClick={() => setQuizOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>AI 出题</h2>
+            {!quiz && (
+              <>
+                <div className="export-grid">
+                  <label>
+                    <input type="radio" name="quiz-scope" checked={quizScope === "chapter"}
+                           onChange={() => setQuizScope("chapter")} />
+                    <span>
+                      <b>仅当前章节</b>
+                      <em>{chapterId
+                        ? (manifest?.chapters ?? []).find((c: any) => c.chapter_id === chapterId)?.title ?? chapterId
+                        : "（请先在顶部选择章节）"}</em>
+                    </span>
+                  </label>
+                  <label>
+                    <input type="radio" name="quiz-scope" checked={quizScope === "book"}
+                           onChange={() => setQuizScope("book")} />
+                    <span><b>整本范围</b><em>综合全书笔记出题</em></span>
+                  </label>
+                </div>
+                <div className="muted">题型（可多选）：</div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", margin: "6px 0" }}>
+                  {([['choice', '选择题'], ['blank', '填空题'], ['calculation', '计算题'],
+                    ['short', '简答题'], ['proof', '证明题']] as const).map(([k, label]) => (
+                    <label key={k} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <input type="checkbox" checked={quizKinds.includes(k)}
+                             onChange={(e) => setQuizKinds(e.target.checked
+                               ? [...quizKinds, k]
+                               : quizKinds.filter((x) => x !== k))} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+                <div className="kv">
+                  <span>题量</span>
+                  <select value={quizCount} onChange={(e) => setQuizCount(Number(e.target.value))}>
+                    {[5, 10, 15, 20].map((n) => <option key={n} value={n}>{n} 道</option>)}
+                  </select>
+                  <span>难度</span>
+                  <select value={quizDifficulty} onChange={(e) => setQuizDifficulty(e.target.value)}>
+                    <option value="基础水平">基础</option>
+                    <option value="期末水平">期末</option>
+                    <option value="考研水平">考研</option>
+                  </select>
+                </div>
+                <div className="muted" style={{ margin: "8px 0" }}>
+                  参考题库：<b>{qbankCount}</b> 题——上传往年题/课后习题，出题会贴近期末风格
+                </div>
+                <label className="file-button">
+                  上传参考题目（PDF/txt/md）
+                  <input type="file" accept=".pdf,.txt,.md" hidden onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    if (!f || !docId) return;
+                    try {
+                      const r = await api.qbankUpload(docId, f);
+                      setQbankCount((n) => n + (r.added ?? 0));
+                      setToast(`已入库 ${r.added} 道参考题`);
+                    } catch (err: any) {
+                      setToast("题库上传失败：" + err.message);
+                    }
+                  }} />
+                </label>
+                <div className="export-actions">
+                  <button onClick={() => setQuizOpen(false)}>取消</button>
+                  <button className="primary" disabled={quizBusy} onClick={() => void runQuiz()}>
+                    {quizBusy ? "出题中…" : "开始出题"}
+                  </button>
+                </div>
+              </>
+            )}
+            {quiz && (
+              <>
+                <div className="muted">
+                  共 {quiz.questions?.length ?? 0} 道 · {quiz.difficulty}
+                  {qbankCount > 0 ? " · 已参考题库" : ""}
+                </div>
+                {(quiz.questions ?? []).map((q: any, i: number) => (
+                  <div key={q.id || i} className="review-row">
+                    <div>
+                      <b>{i + 1}.</b> <span className="muted">
+                        [{q.type === "choice" ? "选择" : q.type === "blank" ? "填空"
+                          : q.type === "calculation" ? "计算" : q.type === "proof" ? "证明" : "简答"}]
+                      </span> {q.question}
+                    </div>
+                    {(q.options ?? []).map((o: string, j: number) => (
+                      <div key={j} className="muted" style={{ paddingLeft: 14 }}>
+                        {String.fromCharCode(65 + j)}. {o}
+                      </div>
+                    ))}
+                    <div>
+                      <button onClick={() => setShowAnswers((s) => ({ ...s, [q.id]: !s[q.id] }))}>
+                        {showAnswers[q.id] ? "收起答案" : "显示答案"}
+                      </button>
+                      {showAnswers[q.id] && (
+                        <div style={{ marginTop: 6 }}>
+                          <b>答案：</b>{q.answer}
+                          {q.explanation ? <div className="muted">解析：{q.explanation}</div> : null}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <div className="export-actions">
+                  <button onClick={() => setQuiz(null)}>再出一套</button>
+                  <button className="primary" onClick={() => setQuizOpen(false)}>完成</button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
