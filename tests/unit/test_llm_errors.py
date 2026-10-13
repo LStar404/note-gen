@@ -83,6 +83,15 @@ def test_transport_error_still_retryable(monkeypatch):
     assert "LLM 请求失败" in str(ei.value)
 
 
+def test_retryable_message_carries_upstream(monkeypatch):
+    """瞬态失败必须带上游原话（只报状态码的失败原因诊断价值为零）。"""
+    a = _adapter(monkeypatch, resp=FakeResp(503, text='{"error":"upstream busy"}'))
+    with pytest.raises(RetryableError) as ei:
+        a.complete("some-model", MSGS, None, 8)
+    assert "upstream busy" in str(ei.value), str(ei.value)
+    assert ei.value.detail["status"] == 503
+
+
 def test_success_path_unchanged(monkeypatch):
     payload = {"id": "chatcmpl-1", "choices": [{"message": {"content": '{"a": 1}'},
                                                 "finish_reason": "stop"}],

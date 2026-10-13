@@ -60,6 +60,19 @@ def test_auth_error_carries_upstream_message(monkeypatch):
     assert "Invalid API Key" in str(ei.value)
 
 
+def test_concurrency_limit_429_is_retryable_not_quota(monkeypatch):
+    """并发上限类 429（余额档位并发上限）不得熔断整章：应退避重试。
+    实测误杀：DeepSeek "current concurrency is 11 ... based on your remaining balance"
+    措辞带 balance 被认成配额耗尽 → 整章提前 paused。"""
+    msg = ("Too many requests. Your current concurrency is 11, which exceeds your "
+           "concurrency limit of 11 based on your remaining balance. "
+           "Please top up your balance to resume higher concurrency.")
+    resp = _FakeResp(429, json.dumps({"error": {"message": msg}}))
+    with pytest.raises(RetryableError) as ei:
+        _call(monkeypatch, resp)
+    assert not isinstance(ei.value, QuotaExhausted), "并发上限类 429 不是配额耗尽"
+
+
 def test_fill_one_isolates_quota_as_failed_result():
     """配额错误按块隔离为失败结果（保整章缓存、下次续填）；不白试由熔断保证。"""
 

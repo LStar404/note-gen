@@ -53,6 +53,18 @@ def _looks_like_quota(message: str) -> bool:
     return any(w in low for w in _QUOTA_WORDS)
 
 
+# 并发上限类限流（如 DeepSeek 按余额档位给并发上限："current concurrency is 11,
+# which exceeds your concurrency limit of 11 based on your remaining balance"）：
+# 措辞里带 balance 会被 _looks_like_quota 误认成配额耗尽 → 熔断整章（实测误杀一次）。
+# 明确点了「并发上限」的 429 是可重试的：退避后并发降下来即可继续，绝不熔断。
+_CONCURRENCY_WORDS = ("concurrency", "并发")
+
+
+def _looks_like_concurrency_limit(message: str) -> bool:
+    low = (message or "").lower()
+    return any(w in low for w in _CONCURRENCY_WORDS)
+
+
 def _json_mode_messages(messages: list[dict]) -> list[dict]:
     """json_object 模式要求提示里出现 "json" 字样（DeepSeek/Qwen 皆然），缺失时补一条系统指令。"""
     if "json" in json.dumps(messages, ensure_ascii=False).lower():
@@ -141,7 +153,9 @@ class OpenAICompatAdapter:
                 + "——请在「设置 → 供应商」核对密钥与模型 id（改完立即生效，无需重启）",
                 detail={"provider_id": self.provider_id, "status": resp.status_code,
                         "body": resp.text[:500]})
-        if resp.status_code == 402 or (resp.status_code == 429 and _looks_like_quota(upstream)):
+        if resp.status_code == 402 or (resp.status_code == 429
+                                      and _looks_like_quota(upstream)
+                                      and not _looks_like_concurrency_limit(upstream)):
             # 配额用尽 ≠ 限流：重试多少次都一样，而且按块隔离会把整章块逐个标失败。
             # 整章快速上抛，任务结局直接给出「配额已用尽」这种可操作结论。
             raise QuotaExhausted(
@@ -151,7 +165,11 @@ class OpenAICompatAdapter:
                 detail={"provider_id": self.provider_id, "status": resp.status_code,
                         "body": resp.text[:500]})
         if resp.status_code in (429, 500, 502, 503, 504):
-            raise RetryableError(f"LLM 服务返回 {resp.status_code}", detail={"body": resp.text[:500]})
+            # 上游原话进消息：失败原因要能看出是「余额档位并发上限」还是普通限流，
+            # 只报状态码的诊断价值为零
+            raise RetryableError(f"LLM 服务返回 {resp.status_code}"
+                                 + (f"：{upstream}" if upstream else ""),
+                                 detail={"status": resp.status_code, "body": resp.text[:500]})
         if resp.status_code >= 400:
             # 其余 4xx（400 参数/404 模型不存在/422 等）同样不可重试
             raise LLMError(
@@ -291,11 +309,36 @@ class LLMClient:
         _th = ((config.get("generate", {}) or {}).get("thinking") or "").strip().lower()
         self.thinking = {"disabled": {"type": "disabled"},
                          "enabled": {"type": "enabled"}}.get(_th)
-        # 全局在途请求总闸（generate.max_concurrent_requests，默认 8）：
-        # 并行分章后「章数 × 章内并发」会一次性打出十几个并发请求，
-        # 触发供应商限流反而被退避拖慢——按信号量把总并发钉在上限内
-        self._slots = threading.BoundedSemaphore(
-            max(1, int((config.get("generate", {}) or {}).get("max_concurrent_requests", 8) or 8)))
+        # 全局在途请求闸（generate.max_concurrent_requests 为上限）+ 自适应调节：
+        # 并行分章后「章数 × 章内并发」会一次性打出十几个并发请求，触发限流反而被
+        # 退避拖慢；且上游并发额度随余额档位浮动（实测 DeepSeek 当前档 11 且随余额
+        # 下降再缩，打满即 429）。429 → 有效并发砍半、每次成功回升 1：钉在实际上限
+        # 之下跑满吞吐，而不是跟一个会漂移的数字较劲
+        self._max_slots = max(1, int((config.get("generate", {}) or {})
+                                     .get("max_concurrent_requests", 8) or 8))
+        self._limit = self._max_slots
+        self._inflight = 0
+        self._gate = threading.Condition()
+
+    def _acquire_slot(self) -> None:
+        with self._gate:
+            while self._inflight >= self._limit:
+                self._gate.wait()
+            self._inflight += 1
+
+    def _release_slot(self) -> None:
+        with self._gate:
+            self._inflight -= 1
+            self._gate.notify_all()
+
+    def _throttle(self, down: bool) -> None:
+        """429 砍半、成功回升 1（不超上限）：自适应钉在上游实际上限之下。"""
+        with self._gate:
+            if down:
+                self._limit = max(1, self._limit // 2)
+            elif self._limit < self._max_slots:
+                self._limit += 1
+                self._gate.notify_all()
 
     # ---- 路由 ----
     def route(self, task: str) -> str:
@@ -347,7 +390,7 @@ class LLMClient:
             request_id = "req_" + uuid.uuid4().hex[:16]
             try:
                 t0 = time.monotonic()
-                self._slots.acquire()
+                self._acquire_slot()
                 t1 = time.monotonic()
                 try:
                     result = adapter.complete(api_model, messages, schema, max_tokens,
@@ -358,15 +401,18 @@ class LLMClient:
                                               reasoning_effort=self.reasoning_effort,
                                               thinking=self.thinking)
                 finally:
-                    self._slots.release()
+                    self._release_slot()
                 with self._stats_lock:
                     self.stats["calls"] += 1
                     self.stats["wait_seconds"] += t1 - t0
                     self.stats["call_seconds"] += time.monotonic() - t1
-            except RetryableError:
+            except RetryableError as exc:
                 with self._stats_lock:
                     self.stats["retries"] += 1
                     self.stats["failures"] += 1
+                # 并发类 429 → 砍半自适应（上游额度会随余额档位漂移）；其余瞬态错误不动闸
+                if (getattr(exc, "detail", None) or {}).get("status") == 429:
+                    self._throttle(down=True)
                 self.runtime.log_usage(
                     provider_id=provider_cfg["id"], model=model_name, task=task,
                     request_id=request_id, doc_id=doc_id, chapter_id=chapter_id,
@@ -374,7 +420,8 @@ class LLMClient:
                     success=False, estimated=True, task_id=task_id)
                 if attempts >= 3:
                     raise
-                time.sleep(min(8.0, 0.5 * (2 ** attempts)))
+                # 退避 2s/4s（曾 1s/2s 太急：限流窗口没过就又撞回去，实测 29 连败）
+                time.sleep(min(8.0, 2.0 * attempts))
                 continue
             except NoteGenError as exc:
                 # 不可重试错误（鉴权/参数/模型不存在）：只记一次失败，立即上抛
@@ -387,6 +434,7 @@ class LLMClient:
                     success=False, estimated=True, task_id=task_id)
                 raise
 
+            self._throttle(down=False)      # 成功一次回升一格（自适应探测上游余量）
             usage = result.get("usage") or {}
             tin = usage.get("in") or est_in
             tout = usage.get("out") or est_out

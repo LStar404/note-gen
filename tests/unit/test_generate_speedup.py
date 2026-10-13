@@ -170,6 +170,68 @@ def test_llm_client_stats_track_calls_retries_and_time(tmp_path):
     assert s["tokens_in"] > 0 and s["tokens_out"] > 0, s
 
 
+def test_429_throttles_concurrency_and_recovers(tmp_path, monkeypatch):
+    """并发类 429：有效并发砍半、成功逐格回升（上游额度随余额档位漂移，实测 429 风暴）。"""
+    from src.core.errors import RetryableError
+    from src.core.llm import DummyProvider
+
+    monkeypatch.setattr("src.core.llm.time.sleep", lambda s: None)   # 退避不真等
+    layout = Layout(tmp_path).ensure_base()
+    registry = ModelRegistry(layout)
+    registry.upsert_provider({"id": "dummy", "label": "Dummy", "protocol": "openai_compat",
+                              "base_url": "http://127.0.0.1:1", "api_key": None,
+                              "capabilities": {"json_schema": True, "tools": True,
+                                               "vision": False},
+                              "models": [{"id": "fake", "context_window": 8192,
+                                          "max_output_tokens": 2048,
+                                          "capabilities": {"json_schema": True, "tools": True,
+                                                           "vision": False},
+                                          "pricing": {"input_per_million": 0,
+                                                      "output_per_million": 0,
+                                                      "currency": "USD"}}]})
+    cfg = {"generate": {"models": {"default": "dummy/fake"},
+                        "max_concurrent_requests": 8, "timeout": 30}}
+    boom = RetryableError("LLM 服务返回 429：concurrency limit", detail={"status": 429})
+    provider = DummyProvider([boom, {"output": {"ok": 1}}, {"output": {"ok": 2}}])
+    client = LLMClient(registry, RuntimeDB(layout.runtime_db), cfg,
+                       overrides={"dummy": provider})
+    assert client._limit == 8
+    client.complete("fill", [{"role": "user", "content": "hi"}], schema=None, max_tokens=8)
+    # 第一发 429 砍半 8→4，重试成功回升 4→5
+    assert client._limit == 5, f"429 砍半/成功回升失灵: {client._limit}"
+    client.complete("fill", [{"role": "user", "content": "hi"}], schema=None, max_tokens=8)
+    assert client._limit == 6, f"成功应回升一格: {client._limit}"
+
+
+def test_non_429_retryable_does_not_throttle(tmp_path, monkeypatch):
+    """5xx/传输类瞬态错误不动并发闸（那不是并发问题）。"""
+    from src.core.errors import RetryableError
+    from src.core.llm import DummyProvider
+
+    monkeypatch.setattr("src.core.llm.time.sleep", lambda s: None)
+    layout = Layout(tmp_path).ensure_base()
+    registry = ModelRegistry(layout)
+    registry.upsert_provider({"id": "dummy", "label": "Dummy", "protocol": "openai_compat",
+                              "base_url": "http://127.0.0.1:1", "api_key": None,
+                              "capabilities": {"json_schema": True, "tools": True,
+                                               "vision": False},
+                              "models": [{"id": "fake", "context_window": 8192,
+                                          "max_output_tokens": 2048,
+                                          "capabilities": {"json_schema": True, "tools": True,
+                                                           "vision": False},
+                                          "pricing": {"input_per_million": 0,
+                                                      "output_per_million": 0,
+                                                      "currency": "USD"}}]})
+    cfg = {"generate": {"models": {"default": "dummy/fake"},
+                        "max_concurrent_requests": 8, "timeout": 30}}
+    boom = RetryableError("LLM 服务返回 503", detail={"status": 503})
+    provider = DummyProvider([boom, {"output": {"ok": 1}}])
+    client = LLMClient(registry, RuntimeDB(layout.runtime_db), cfg,
+                       overrides={"dummy": provider})
+    client.complete("fill", [{"role": "user", "content": "hi"}], schema=None, max_tokens=8)
+    assert client._limit == 8, f"5xx 不应动闸: {client._limit}"
+
+
 def test_generate_report_contains_timing(sample_doc):
     """生成报告必须带 timing：总耗时/生成墙钟/提交耗时/LLM 遥测——「太慢」要能定位。"""
     from src.core.llm import DummyProvider
