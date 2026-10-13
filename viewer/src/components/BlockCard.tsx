@@ -56,7 +56,14 @@ function BlockCard({ block, selected, onSelect }: {
   };
 
   return (
-    <div className={`block-card ${selected ? "selected" : ""}`} onClick={() => onSelect(block.id)}>
+    <div
+      className={`block-card ${selected ? "selected" : ""}`}
+      onClick={() => {
+        // 单击卡片 = 选中 + 展开阅读（⤢ 按钮保留，点击来源徽章等子控件不触发）
+        onSelect(block.id);
+        openZoom(block.id);
+      }}
+    >
       <div className="block-head">
         <span className="block-type">{TYPE_ICON[block.type] ?? "📝"}</span>
         <MathText className="block-title" text={block.title} docId={docId ?? ""} />

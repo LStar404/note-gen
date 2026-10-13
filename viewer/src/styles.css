@@ -400,6 +400,19 @@ select:focus, input:focus, textarea:focus {
 .usage-table input { width: 78px; padding: 4px 7px; }
 .review-row { border-bottom: 1px solid var(--border); padding: 11px 0; }
 
+/* ---------------- 导出弹窗 ---------------- */
+.export-grid { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.export-grid label {
+  display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 10px; cursor: pointer;
+  transition: border-color .15s ease;
+}
+.export-grid label:hover { border-color: var(--accent); }
+.export-grid input { margin-top: 3px; }
+.export-grid span { display: flex; flex-direction: column; gap: 2px; }
+.export-grid em { font-style: normal; font-size: 12px; color: var(--muted); }
+.export-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+
 /* ---------------- 拖拽上传遮罩 ---------------- */
 .drop-overlay {
   position: fixed; inset: 0; z-index: 120; display: grid; place-items: center;

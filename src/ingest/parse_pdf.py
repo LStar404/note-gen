@@ -600,6 +600,11 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
             break
         try:
             adapter = ad
+            if progress:
+                # 转换期单独报状态：重型解析器整书转换是导入最久的一段（页数多时十几分钟），
+                # 没有页级信号——不报状态进度条就一直趴着，用户以为卡死
+                progress({"stage": "ingest", "pages_done": 0, "pages_total": n_pages,
+                          "parser": ad.name, "phase": "convert"})
             bulk = ad.parse_document(pdf_path, pages_meta=pages_meta_all)
             break
         except (InputError, PipelineError) as exc:

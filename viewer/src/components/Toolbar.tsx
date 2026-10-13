@@ -10,6 +10,7 @@ function progressText(p: any): string {
   if (p.stage === "outline_done") return "提纲完成 " + (p.count ?? 0) + " 项";
   if (p.stage === "fill" && p.total) return "填充 " + (p.done ?? 0) + "/" + p.total;
   if (p.stage === "generate") return p.chapter_id ? "生成 " + p.chapter_id : "生成中";
+  if (p.stage === "ingest" && p.phase === "convert") return "解析器转换中…（重型解析器，页数多时较久）";
   if (p.stage === "ingest" && p.pages_total) return "解析 " + (p.pages_done ?? 0) + "/" + p.pages_total + " 页";
   if (p.stage === "anchor" && p.total) return "锚定 " + (p.done ?? 0) + "/" + p.total + " 章";
   return String(p.stage ?? "");
@@ -34,14 +35,17 @@ function progressPercent(kind: string, p: any): number | null {
     if (p.stage === "link") return 98;
   }
   if (kind === "import") {
+    // 解析占 5-90%、锚定 90-98%：进度条与「解析 363/364 页」文字必须对得上；
+    // 转换期（重型解析器整书转换，页数多时十几分钟）单独显示状态不显示假进度
+    if (p.stage === "ingest" && p.phase === "convert") return 4;
     if (p.stage === "ingest" && p.pages_total) {
-      return 5 + Math.round(((p.pages_done ?? 0) / p.pages_total) * 55);
+      return 5 + Math.round(((p.pages_done ?? 0) / p.pages_total) * 85);
     }
     if (p.stage === "ingest") return 15;
     if (p.stage === "anchor" && p.total) {
-      return 65 + Math.round(((p.done ?? 0) / p.total) * 30);
+      return 90 + Math.round(((p.done ?? 0) / p.total) * 8);
     }
-    if (p.stage === "anchor") return 70;
+    if (p.stage === "anchor") return 92;
   }
   if (kind === "export" && p.stage === "export") return 60;
   return null;
@@ -282,11 +286,20 @@ export default function Toolbar() {
     }
   };
 
-  const doExport = async (format: string) => {
+  const doExport = async (format: string, scope: "book" | "chapter") => {
     if (!docId) return;
+    if (scope === "chapter" && !chapterId) {
+      setToast("请先选择要导出的章节");
+      return;
+    }
     try {
-      const { task_id } = await api.exportDoc({ doc_id: docId, format });
+      const { task_id } = await api.exportDoc({
+        doc_id: docId,
+        format,
+        ...(scope === "chapter" && chapterId ? { chapter_id: chapterId } : {}),
+      });
       track(task_id, "export");
+      setExportOpen(false);
       setToast("导出任务已启动：" + task_id);
     } catch (e: any) {
       setToast("导出失败：" + e.message);
@@ -334,6 +347,10 @@ export default function Toolbar() {
     trashedTo: string;
   }>(null);
   const [records, setRecords] = useState<any[] | null>(null);
+  // 统一导出弹窗：所有导出共享一个入口，点进去选格式与范围
+  const [exportOpen, setExportOpen] = useState(false);
+  const [expFormat, setExpFormat] = useState("md");
+  const [expScope, setExpScope] = useState<"book" | "chapter">("book");
 
   // 生成记录（9.2 报告透传）：各章生成时间/模型/结果
   const openRecords = async () => {
@@ -472,9 +489,10 @@ export default function Toolbar() {
         style={{ width: 130 }}
       />
       <button onClick={doGenerate}>生成本章</button>
-      <button onClick={() => void doExport("md")}>导出 md</button>
-      <button onClick={() => void doExport("tex")}>导出 tex</button>
-      <button onClick={() => void doExport("md-obsidian")}>导出 Obsidian</button>
+      <button className="primary" onClick={() => setExportOpen(true)}
+              title="导出笔记：Markdown / LaTeX / Obsidian / Anki，可选整本或当前章节">
+        导出
+      </button>
       <button onClick={() => void openReview(true)}>待审核</button>
       <button onClick={() => void openRecords()} title="查看各章生成的时间、模型与结果">生成记录</button>
       {docId && (
@@ -675,6 +693,62 @@ export default function Toolbar() {
               );
             })}
             <button onClick={() => setRecords(null)}>关闭</button>
+          </div>
+        </div>
+      )}
+      {exportOpen && (
+        <div className="modal-mask" onClick={() => setExportOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>导出笔记</h2>
+            <div className="export-grid">
+              <label>
+                <input type="radio" name="exp-format" checked={expFormat === "md"}
+                       onChange={() => setExpFormat("md")} />
+                <span><b>Markdown</b><em>纯 .md 文集，公式保持 LaTeX，通用性最好</em></span>
+              </label>
+              <label>
+                <input type="radio" name="exp-format" checked={expFormat === "tex"}
+                       onChange={() => setExpFormat("tex")} />
+                <span><b>LaTeX</b><em>可直接编译的 .tex（含图），适合投稿/打印</em></span>
+              </label>
+              <label>
+                <input type="radio" name="exp-format" checked={expFormat === "both"}
+                       onChange={() => setExpFormat("both")} />
+                <span><b>Markdown + LaTeX</b><em>一次导出两套</em></span>
+              </label>
+              <label>
+                <input type="radio" name="exp-format" checked={expFormat === "md-obsidian"}
+                       onChange={() => setExpFormat("md-obsidian")} />
+                <span><b>Obsidian</b><em>按块拆分的双链库，可直接放进仓库</em></span>
+              </label>
+              <label>
+                <input type="radio" name="exp-format" checked={expFormat === "anki"}
+                       onChange={() => setExpFormat("anki")} />
+                <span><b>Anki 牌组</b><em>问答卡片（标题→内容），导入 Anki 记忆</em></span>
+              </label>
+            </div>
+            <div className="export-grid">
+              <label>
+                <input type="radio" name="exp-scope" checked={expScope === "book"}
+                       onChange={() => setExpScope("book")} />
+                <span><b>整本</b></span>
+              </label>
+              <label>
+                <input type="radio" name="exp-scope" checked={expScope === "chapter"}
+                       onChange={() => setExpScope("chapter")} />
+                <span>
+                  <b>仅当前章节</b>
+                  <em>{chapterId ? (manifest?.chapters ?? []).find(
+                    (c: any) => c.chapter_id === chapterId)?.title ?? chapterId : "（请先在顶部选择章节）"}</em>
+                </span>
+              </label>
+            </div>
+            <div className="export-actions">
+              <button onClick={() => setExportOpen(false)}>取消</button>
+              <button className="primary" onClick={() => void doExport(expFormat, expScope)}>
+                开始导出
+              </button>
+            </div>
           </div>
         </div>
       )}
