@@ -33,7 +33,9 @@ class AppState:
 
     def reload_config(self) -> dict:
         self.config = load_config(self.root)
-        self.client.config = self.config
+        # 热应用而非只换引用：thinking/推理深度/超时/并发上限都是客户端构造时固化的
+        # 字段，只换 config 引用不会生效（设置改了没反应，要重启才生效）
+        self.client.apply_config(self.config)
         return self.config
 
     def invalidate_client(self) -> None:

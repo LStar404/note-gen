@@ -300,13 +300,26 @@ class LLMClient:
         # 配额熔断：一次 QuotaExhausted 后本次任务内不再发请求（剩余块快速标失败，
         # 已产出结果落缓存，下次生成自动续填——不再整章作废）
         self.halted_reason: str | None = None
+        self._inflight = 0
+        self._gate = threading.Condition()
+        self._limit = 1
+        self.apply_config(config)
+
+    def apply_config(self, config: dict) -> None:
+        """热应用生成参数（thinking/推理深度/超时/并发上限）。
+
+        这些字段在构造时固化，只换 self.config 引用不会生效——用户在设置里改完
+        保存，客户端仍用旧值发请求（「改了没反应，要重启才生效」实测过这类坑）。
+        设置保存路径必须调本方法。"""
+        self.config = config
+        gen = config.get("generate", {}) or {}
         # 单次调用超时（5.3.2 可配置）：推理型模型（MiMo 等）单次可超 2 分钟，
         # 默认 120s 会被误判超时并白重试（实测 ch08 提纲阶段多次 success=0 空转）
-        self.timeout = float((config.get("generate", {}) or {}).get("timeout", 600.0))
+        self.timeout = float(gen.get("timeout", 600.0))
         # 推理深度（generate.reasoning_effort）：low/medium/high，空=供应商默认
-        self.reasoning_effort = (config.get("generate", {}) or {}).get("reasoning_effort") or None
+        self.reasoning_effort = gen.get("reasoning_effort") or None
         # 思考开关（generate.thinking）：disabled/enabled/default
-        _th = ((config.get("generate", {}) or {}).get("thinking") or "").strip().lower()
+        _th = (gen.get("thinking") or "").strip().lower()
         self.thinking = {"disabled": {"type": "disabled"},
                          "enabled": {"type": "enabled"}}.get(_th)
         # 全局在途请求闸（generate.max_concurrent_requests 为上限）+ 自适应调节：
@@ -314,11 +327,10 @@ class LLMClient:
         # 退避拖慢；且上游并发额度随余额档位浮动（实测 DeepSeek 当前档 11 且随余额
         # 下降再缩，打满即 429）。429 → 有效并发砍半、每次成功回升 1：钉在实际上限
         # 之下跑满吞吐，而不是跟一个会漂移的数字较劲
-        self._max_slots = max(1, int((config.get("generate", {}) or {})
-                                     .get("max_concurrent_requests", 8) or 8))
-        self._limit = self._max_slots
-        self._inflight = 0
-        self._gate = threading.Condition()
+        with self._gate:
+            self._max_slots = max(1, int(gen.get("max_concurrent_requests", 8) or 8))
+            self._limit = self._max_slots if self._limit <= 1 else min(self._limit, self._max_slots)
+            self._gate.notify_all()
 
     def _acquire_slot(self) -> None:
         with self._gate:

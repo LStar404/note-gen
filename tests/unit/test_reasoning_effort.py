@@ -83,3 +83,32 @@ def _registry():
                          "models": [{"id": "fake", "context_window": 8192,
                                      "max_output_tokens": 2048, "pricing": None}]})
     return reg
+
+
+def test_settings_hot_apply_to_live_client(workspace):
+    """设置保存后必须热应用到存活客户端：thinking/推理深度/超时/并发上限曾只换
+    config 引用、字段仍是构造时旧值——UI 改完设置一直不生效，只能重启服务。"""
+    from fastapi.testclient import TestClient
+
+    from src.api.main import create_app
+
+    app = create_app(workspace.root)
+    with TestClient(app, base_url="http://127.0.0.1:8787") as client:
+        headers = {"X-Local-Token": app.state.app_state.token_value}
+        r = client.put("/api/v1/settings", json={"generate": {
+            "thinking": "enabled", "reasoning_effort": "high",
+            "timeout": 77, "max_concurrent_requests": 5}}, headers=headers)
+        assert r.status_code == 200, r.text
+        lc = app.state.app_state.client
+        assert lc.thinking == {"type": "enabled"}, lc.thinking
+        assert lc.reasoning_effort == "high", lc.reasoning_effort
+        assert lc.timeout == 77.0, lc.timeout
+        assert lc._max_slots == 5, lc._max_slots
+        # 再改回同样立即生效（对象原地热应用，运行中任务共用）
+        r2 = client.put("/api/v1/settings", json={"generate": {
+            "thinking": "disabled", "max_concurrent_requests": 9}}, headers=headers)
+        assert r2.status_code == 200, r2.text
+        lc2 = app.state.app_state.client
+        assert lc2 is lc, "热应用不得换掉客户端对象"
+        assert lc2.thinking == {"type": "disabled"}
+        assert lc2._max_slots == 9
