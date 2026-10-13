@@ -563,17 +563,19 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
             chosen = "pymupdf"
             print("[ingest] auto → pymupdf：文字层抽取质量差（疑似缺 ToUnicode），换保真抽取",
                   file=sys.stderr)
-    if chosen in ("pymupdf", "mupdf"):
-        try:
-            adapter = get_adapter("pymupdf", python=parser_python)
-        except (InputError, PipelineError):
-            adapter = get_adapter("auto", python=parser_python)
+    # 转换级回退链（5.1 能力驱动降级）：构造成功 ≠ 转换成功——marker 装着但要 Docker，
+    # 转换期才爆（实测图片 PDF 直接解析失败、OCR 兜底没机会跑）。auto 按链尝试
+    # 「构造 + 整书转换」，链尾 pymupdf/pypdf 对扫描页出空块，由批量 OCR 兜底（5.1.1）
+    # 补齐内容；显式指定解析器时不回退（用户点名即意图，失败要说清楚）。
+    if parser == "auto":
+        if chosen == "pypdf":
+            chain = ["pypdf", "pymupdf"]
+        elif chosen == "pymupdf":
+            chain = ["pymupdf", "pypdf"]
+        else:
+            chain = ["marker", "docling", "pymupdf", "pypdf"]   # 无文字层的扫描书
     else:
-        adapter = get_adapter(chosen, python=parser_python)
-    if progress:
-        progress({"stage": "ingest", "pages_done": 0, "pages_total": n_pages,
-                  "parser": adapter.name})
-
+        chain = [chosen]
     # 5.2：doc_ns 碰撞必须拒绝导入，否则全局点查（anchor_id 前缀）产生歧义
     ns = doc_namespace(doc_id)
     for other in layout.data_dir.glob("*/manifest.json"):
@@ -583,9 +585,34 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
                 f"doc_id 命名空间冲突：{doc_id} 与已有文档 {other_doc} 的 doc_ns({ns}) 相同，"
                 f"请换一个 doc_id（否则锚点全局点查会歧义）",
                 code="DOC_NS_COLLISION")
-    bulk = (adapter.parse_document(pdf_path,
-                                   pages_meta=[_pdf_page_meta(reader.pages[i]) for i in range(n_pages)])
-            if hasattr(adapter, "parse_document") else None)
+    pages_meta_all = [_pdf_page_meta(reader.pages[i]) for i in range(n_pages)]
+    adapter = None
+    bulk = None
+    chain_notes: list[str] = []
+    for name in chain:
+        try:
+            ad = get_adapter(name, python=parser_python)
+        except (InputError, PipelineError) as exc:
+            chain_notes.append(f"{name} 不可用（{str(exc)[:80]}）")
+            continue
+        if not hasattr(ad, "parse_document"):
+            adapter, bulk = ad, None
+            break
+        try:
+            adapter = ad
+            bulk = ad.parse_document(pdf_path, pages_meta=pages_meta_all)
+            break
+        except (InputError, PipelineError) as exc:
+            chain_notes.append(f"{name} 解析失败（{str(exc)[:80]}）")
+            adapter, bulk = None, None
+            continue
+    if adapter is None:
+        raise PipelineError("没有可用的解析器：" + ("；".join(chain_notes) or "未知原因"))
+    for note in chain_notes:
+        print(f"[ingest] 回退：{note}", file=sys.stderr)
+    if progress:
+        progress({"stage": "ingest", "pages_done": 0, "pages_total": n_pages,
+                  "parser": adapter.name})
     # pypdf 路径逐页抽取并行化（纯 Python 抽取占整解析 86%，实测 297 页 38.8s/45.2s）；
     # bulk 适配器（marker/docling/pymupdf）本就整文档一次调用，不走此路
     page_results = (None if bulk is not None else
