@@ -66,6 +66,50 @@ class ParserAdapter:
         raise NotImplementedError
 
 
+def _pypdf_extract_range(args: tuple) -> list[dict]:
+    """进程池 worker：独立打开 PDF 抽取 [start, end) 页。
+
+    pypdf 是纯 Python、GIL 绑定（实测抽取占整解析 86%：297 页 38.8s/45.2s），
+    多线程无益，多进程按页区间分摊；parse_page 每页自包含，输出与串行逐字节一致。"""
+    pdf_path, start, end = args
+    import pypdf
+
+    reader = pypdf.PdfReader(pdf_path)
+    adapter = PypdfAdapter()
+    return [adapter.parse_page(reader, i) for i in range(start, end)]
+
+
+def _extract_pages_parallel(adapter: "ParserAdapter", pdf_path, reader, n_pages: int,
+                            progress: Callable[[dict], None] | None = None) -> list[dict]:
+    """非 bulk 适配器的逐页抽取：页数多时多进程分摊，小文档保持串行（起进程不值）。
+
+    并行只是执行顺序变化，页面结果按页号归位输出；并行路径任何异常退回串行重算，
+    不让并行性成为新的故障面。"""
+    import os
+
+    workers = max(1, min(8, (os.cpu_count() or 2) - 1))
+    if not isinstance(adapter, PypdfAdapter) or n_pages < 24 or workers < 2:
+        return [adapter.parse_page(reader, i) for i in range(n_pages)]
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    chunk = max(4, (n_pages + workers * 4 - 1) // (workers * 4))
+    ranges = [(str(pdf_path), s, min(n_pages, s + chunk)) for s in range(0, n_pages, chunk)]
+    out: dict[int, dict] = {}
+    try:
+        with ProcessPoolExecutor(max_workers=min(workers, len(ranges))) as pool:
+            futures = {pool.submit(_pypdf_extract_range, r): r for r in ranges}
+            for fut in as_completed(futures):
+                start = futures[fut][1]
+                for j, res in enumerate(fut.result()):
+                    out[start + j] = res
+                if progress:
+                    progress({"stage": "ingest", "pages_done": len(out),
+                              "pages_total": n_pages, "parser": adapter.name})
+    except Exception:
+        return [adapter.parse_page(reader, i) for i in range(n_pages)]
+    return [out[i] for i in range(n_pages)]
+
+
 # ---------------------------------------------------------------------------
 # 内置 pypdf 适配器（离线兜底，ADR D27）
 # ---------------------------------------------------------------------------
@@ -311,13 +355,22 @@ def ocr_pages_via_worker(pdf_path: str | Path, pages: list[int], pages_meta: lis
         return None
 
 
+_WORKER_PROBE_CACHE: dict[tuple, dict] = {}
+
+
 class WorkerAdapter(ParserAdapter):
     """在独立解释器（默认 .venv-parsers）中运行的解析器适配器（ADR D31）。"""
 
     def __init__(self, name: str, python: str | None = None):
         self.name = name
         self.python = python
-        info = self._call("probe", {})
+        # 只探自己的模块并按 (解释器, 模块) 缓存：曾每构造一次就起子进程全量探测
+        # （含 torch import，实测 8.6s/次）；版本随后由解析响应带回
+        key = (str(python or ""), name)
+        info = _WORKER_PROBE_CACHE.get(key)
+        if info is None:
+            info = self._call("probe", {"only": [name]})
+            _WORKER_PROBE_CACHE[key] = info
         modules = info.get("modules", {}) if isinstance(info, dict) else {}
         if not modules.get(self.name):
             raise InputError(
@@ -335,6 +388,8 @@ class WorkerAdapter(ParserAdapter):
                                     "pages_meta": pages_meta or []})
         if not out.get("ok"):
             raise PipelineError(f"{self.name} 解析失败: {out.get('error')}")
+        if out.get("version"):
+            self.version = str(out["version"])
         return out
 
     def parse_page(self, reader, page_index: int) -> dict:  # pragma: no cover - 整书路径覆盖
@@ -357,6 +412,40 @@ class PyMupdfAdapter(WorkerAdapter):
 
     def __init__(self, python: str | None = None):
         super().__init__("pymupdf", python=python)
+
+    def parse_document(self, pdf_path: str | Path, pages_meta: list[dict] | None = None) -> dict:
+        """整书解析，长书分片并行：每个 worker 子进程要付启动 + fitz import 固定开销，
+        分片把抽取/序列化也按页分摊（实测 300 页整书单进程 ~11s → 分片 ~6s）。
+        marker/docling 重型解析器不走此路（分片会成倍烧 CPU/GPU）。"""
+        import os
+
+        pages_meta = pages_meta or []
+        shards_n = max(1, min(3, (os.cpu_count() or 2) - 1))
+        if len(pages_meta) < 120 or shards_n < 2:
+            return super().parse_document(pdf_path, pages_meta=pages_meta)
+        from concurrent.futures import ThreadPoolExecutor
+
+        chunk = (len(pages_meta) + shards_n - 1) // shards_n
+        shards = [(s, pages_meta[s:s + chunk]) for s in range(0, len(pages_meta), chunk)]
+        resolved = str(Path(pdf_path).resolve())
+
+        def _run(shard: tuple[int, list[dict]]) -> dict:
+            return self._call(self.name, {"pdf_path": resolved, "pages_meta": shard[1],
+                                          "page_start": shard[0]})
+
+        with ThreadPoolExecutor(max_workers=len(shards)) as pool:
+            outs = list(pool.map(_run, shards))
+        merged: dict = {"ok": True, "pages": [], "warnings": [], "coordinate": {}}
+        for out in outs:
+            if not out.get("ok"):
+                raise PipelineError(f"{self.name} 解析失败: {out.get('error')}")
+            merged["pages"].extend(out.get("pages") or [])
+            merged["warnings"].extend(out.get("warnings") or [])
+            merged["coordinate"] = merged["coordinate"] or (out.get("coordinate") or {})
+            if out.get("version"):
+                merged["version"] = out["version"]
+        merged["pages"].sort(key=lambda p: p.get("page", 0))
+        return merged
 
 
 def get_adapter(name: str, *, python: str | None = None) -> ParserAdapter:
@@ -494,9 +583,13 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
                 f"doc_id 命名空间冲突：{doc_id} 与已有文档 {other_doc} 的 doc_ns({ns}) 相同，"
                 f"请换一个 doc_id（否则锚点全局点查会歧义）",
                 code="DOC_NS_COLLISION")
-    pages_meta_all = [_pdf_page_meta(reader.pages[i]) for i in range(n_pages)]
-    bulk = (adapter.parse_document(pdf_path, pages_meta=pages_meta_all)
+    bulk = (adapter.parse_document(pdf_path,
+                                   pages_meta=[_pdf_page_meta(reader.pages[i]) for i in range(n_pages)])
             if hasattr(adapter, "parse_document") else None)
+    # pypdf 路径逐页抽取并行化（纯 Python 抽取占整解析 86%，实测 297 页 38.8s/45.2s）；
+    # bulk 适配器（marker/docling/pymupdf）本就整文档一次调用，不走此路
+    page_results = (None if bulk is not None else
+                    _extract_pages_parallel(adapter, pdf_path, reader, n_pages, progress=progress))
     if bulk:
         for warn in bulk.get("warnings", []):
             print(f"[ingest] {adapter.name}: {warn}", file=sys.stderr)
@@ -518,8 +611,8 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
         if progress and (i % 5 == 0 or i == n_pages - 1):
             progress({"stage": "ingest", "pages_done": i, "pages_total": n_pages,
                       "parser": adapter.name})
-        meta = _pdf_page_meta(reader.pages[i])
         if bulk is not None:
+            meta = _pdf_page_meta(reader.pages[i])
             page_data = (bulk.get("pages") or [])[i] if i < len(bulk.get("pages") or []) else {}
             coord = bulk.get("coordinate", {})
             result = {
@@ -532,8 +625,11 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
                 "error": page_data.get("error"),
             }
         else:
-            result = adapter.parse_page(reader, i)
-            result.setdefault("meta", meta)
+            result = (page_results[i] if page_results is not None
+                      else adapter.parse_page(reader, i))
+            # 并行 worker 已带回 meta：父进程不再逐页重解析页对象（省一份 read_object）
+            meta = result.get("meta") or _pdf_page_meta(reader.pages[i])
+            result["meta"] = meta
         view_box = meta["view_box"]
         blocks = result.get("blocks", [])
         # 纯图片/扫描页：无文字层时标记待 OCR（批量一次调用，见循环后）
@@ -592,7 +688,10 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
     # 纯图片/扫描页 OCR（5.1.1）：批量一次调用，避免每页起一个 worker 进程
     if ocr_mode != "off" and any(p["needs_ocr"] for p in pending):
         targets = [p["index"] + 1 for p in pending if p["needs_ocr"]]
-        ocr_out = ocr_pages_via_worker(pdf_path, targets, pages_meta_all, python=parser_python)
+        ocr_out = ocr_pages_via_worker(
+            pdf_path, targets,
+            [_pdf_page_meta(reader.pages[i]) for i in range(n_pages)],
+            python=parser_python)
         ocr_by_page = {}
         for pg in ((ocr_out or {}).get("pages") or []):
             ocr_by_page[pg.get("page")] = pg.get("blocks", [])
@@ -623,7 +722,8 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
         page_json = p["page_json"]
         page_name = "%04d.json" % (p["index"] + 1)
         atomic_write_bytes(pages_dir / page_name,
-                           (json.dumps(page_json, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+                           (json.dumps(page_json, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+                           fsync=False)   # 派生页 JSON 可重建：免逐文件刷盘（实测 2.3s/书）
         page_records.append({
             "page": p["index"] + 1,
             "view_box": list(page_json["coordinate_meta"]["view_box"]),

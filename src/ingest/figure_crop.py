@@ -20,7 +20,11 @@ def crop_figure(pdf_path: str | Path, page: int, bbox: list[float], out_path: st
 
         doc = fitz.open(str(pdf_path))
         pg = doc[page - 1]
-        rect = fitz.Rect(x0, y0, x1, y1)
+        # bbox 是 PDF 用户空间（y 向上，pages JSON 契约）；fitz 页面坐标 y 向下，
+        # 必须按视图上下界之和翻转（同 pymupdf_extract 的换算）——曾直接传原始 bbox，
+        # 裁出的是页面镜像位置的图（顶红底蓝实验实测：裁顶红出底蓝）
+        flip = float(pg.rect.y0 + pg.rect.y1)
+        rect = fitz.Rect(x0, flip - y1, x1, flip - y0)
         pix = pg.get_pixmap(matrix=fitz.Matrix(300 / 72, 300 / 72), clip=rect)
         pix.save(str(out_path))
         doc.close()

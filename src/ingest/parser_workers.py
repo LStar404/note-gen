@@ -148,8 +148,12 @@ def _map_type(label: str) -> tuple[str, int]:
 
 # --------------------------------------------------------------------------- probe
 def probe(req: dict) -> dict:
+    """可用性探测；req["only"] 只探指定模块（全量探测要 import torch 等重型库，
+    实测 8.6s/次——适配器构造只需自己的模块版本）。"""
     out = {"ok": True, "python": sys.version.split()[0], "modules": {}}
-    for name in ("marker", "docling", "pix2text", "torch", "onnxruntime", "pypdf", "pymupdf"):
+    names = req.get("only") or ["marker", "docling", "pix2text", "torch",
+                                "onnxruntime", "pypdf", "pymupdf"]
+    for name in names:
         try:
             mod = __import__(name)
             out["modules"][name] = getattr(mod, "__version__", "unknown")
@@ -535,17 +539,19 @@ def pymupdf_extract(req: dict) -> dict:
         return {"ok": False, "parser": "pymupdf", "error": f"打开 PDF 失败: {exc}"}
 
     try:
+        # page_start：分片并行抽取时的绝对页偏移（父进程按片拼接，页号必须保持全书序）
+        page_start = int(req.get("page_start") or 0)
         for idx in range(len(pages_meta)):
             meta = pages_meta[idx]
             vb = meta.get("view_box") or [0, 0, 0, 0]
-            page_out = {"page": idx + 1, "status": "ok", "blocks": []}
+            page_out = {"page": page_start + idx + 1, "status": "ok", "blocks": []}
             if int(meta.get("rotation", 0) or 0) % 360 != 0:
                 page_out["status"] = "failed"
                 page_out["error"] = "旋转页不走 pymupdf 快路径（5.1.5 禁止猜旋转）"
                 pages.append(page_out)
                 continue
             try:
-                data = doc[idx].get_text("dict")
+                data = doc[page_start + idx].get_text("dict")
             except Exception as exc:
                 page_out["status"] = "failed"
                 page_out["error"] = str(exc)[:200]

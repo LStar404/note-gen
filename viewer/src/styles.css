@@ -400,6 +400,28 @@ select:focus, input:focus, textarea:focus {
 .usage-table input { width: 78px; padding: 4px 7px; }
 .review-row { border-bottom: 1px solid var(--border); padding: 11px 0; }
 
+/* ---------------- 拖拽上传遮罩 ---------------- */
+.drop-overlay {
+  position: fixed; inset: 0; z-index: 120; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  backdrop-filter: blur(3px); pointer-events: none;   /* 事件直通窗口，遮罩只做视觉 */
+}
+.drop-card {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 28px 44px; border-radius: 18px; text-align: center;
+  background: var(--panel); border: 2px dashed var(--accent);
+  box-shadow: var(--shadow-md, 0 12px 40px rgba(0, 0, 0, .18));
+  animation: drop-pulse 1.2s ease-in-out infinite;
+}
+.drop-card .drop-icon { font-size: 42px; }
+.drop-card b { font-size: 18px; color: var(--accent); }
+.drop-card .muted { font-size: 12px; max-width: 320px; }
+@keyframes drop-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+}
+html[data-motion="soft"] .drop-card { animation: none; }
+
 /* ---------------- 任务托盘 / 提示 ---------------- */
 /* 任务托盘：行全宽定轨——文字弹性吸收每秒的进度/计时变化，按钮组钉在右侧固定轨位，
    不再随任务文字/条目增删到处滑动；托盘限高滚动，任务多少都不挤动工具栏与正文 */

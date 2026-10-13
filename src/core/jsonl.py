@@ -72,8 +72,11 @@ def _fsync_file(path: Path) -> None:
         os.close(fd)
 
 
-def atomic_write_bytes(path: str | Path, data: bytes) -> None:
-    """整文件原子替换：同目录临时文件 + fsync + os.replace（Windows 同卷）。"""
+def atomic_write_bytes(path: str | Path, data: bytes, *, fsync: bool = True) -> None:
+    """整文件原子替换：同目录临时文件 + fsync + os.replace（Windows 同卷）。
+
+    fsync=False 供派生/可重建数据的批量写（ingest 页 JSON 逐文件三重刷盘实测 2.3s/书），
+    崩溃后重跑即重建，不值得付逐文件刷盘；数据文件（blocks/anchors/manifest）保持默认。"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
@@ -81,12 +84,15 @@ def atomic_write_bytes(path: str | Path, data: bytes) -> None:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
             fh.flush()
-            os.fsync(fh.fileno())
+            if fsync:
+                os.fsync(fh.fileno())
         os.replace(tmp, path)
     except Exception:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+    if not fsync:
+        return
     try:
         _fsync_file(path)
     except OSError:

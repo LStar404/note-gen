@@ -75,6 +75,54 @@ export default function Toolbar() {
   const [results, setResults] = useState<any | null>(null);
   const [tasks, setTasks] = useState<any[]>([]);
   const timersRef = useRef<Set<number>>(new Set());
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
+
+  // 拖拽上传 PDF（全窗口落点）：拖入即高亮，松手触发与「导入 PDF」同一条导入流
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) =>
+      Array.from(e.dataTransfer?.types ?? []).includes("Files");
+    const onDragEnter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current += 1;
+      setDragOver(true);
+    };
+    const onDragOver = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();              // 不拦截默认行为就无法触发 drop
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    };
+    const onDragLeave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragOver(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      dragDepth.current = 0;
+      setDragOver(false);
+      const file = e.dataTransfer?.files?.[0];
+      if (!file) return;
+      const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+      if (!isPdf) {
+        setToast("只支持 PDF 文件：" + file.name);
+        return;
+      }
+      void importPdf(file);
+    };
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onDragEnter);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 组件卸载时清掉所有轮询定时器，避免僵尸请求/内存泄漏
   useEffect(() => {
@@ -552,6 +600,15 @@ export default function Toolbar() {
         </div>
       )}
     </header>
+      {dragOver && (
+        <div className="drop-overlay" aria-hidden="true">
+          <div className="drop-card">
+            <div className="drop-icon">📄</div>
+            <b>松开导入 PDF</b>
+            <span className="muted">支持任意大小的数字版/扫描版教材，导入后自动解析、分章、锚定</span>
+          </div>
+        </div>
+      )}
       {deleted && (
         <div className="modal-mask" onClick={() => setDeleted(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
