@@ -356,6 +356,30 @@ export default function Toolbar() {
     }
   };
 
+  const doGenerateBook = async () => {
+    if (!docId) return;
+    const chapters = manifest?.chapters ?? [];
+    const ok = window.confirm(
+      "一键生成全书？\n\n" +
+      "· 共 " + chapters.length + " 章，全部生成笔记\n" +
+      "· 已有笔记不会丢：按合并策略原地更新（人工修改/受保护块照旧保留）\n" +
+      "· 消耗较大：时间与 token 都是全书量级；任务可随时暂停/续跑\n\n" +
+      "确定开始？"
+    );
+    if (!ok) return;
+    try {
+      const custom = genName.trim();
+      const { task_id } = await api.generate(docId, { name: custom || undefined });
+      const st = useStore.getState();
+      const docTitle = st.docs.find((d) => d.doc_id === docId)?.title ?? docId;
+      track(task_id, "generate", { doc_id: docId, chapter_id: null },
+        custom || (docTitle + " · 整本"));
+      setToast("全书生成已启动：" + (custom || docTitle + " · 整本"));
+    } catch (e: any) {
+      setToast("生成失败：" + e.message);
+    }
+  };
+
   const importPdf = async (file: File | null) => {
     if (!file) return;
     const form = new FormData();
@@ -553,6 +577,12 @@ export default function Toolbar() {
         style={{ width: 130 }}
       />
       <button onClick={doGenerate}>生成本章</button>
+      <button
+        onClick={() => void doGenerateBook()}
+        title="一键生成全书：全部章节生成笔记（已有笔记不丢，按合并策略更新）；可暂停/续跑"
+      >
+        全书生成
+      </button>
       <button className="primary" onClick={() => setExportOpen(true)}
               title="导出笔记：Markdown / LaTeX / Obsidian / Anki，可选整本或当前章节">
         导出
