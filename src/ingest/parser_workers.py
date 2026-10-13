@@ -318,6 +318,9 @@ def docling_extract(req: dict) -> dict:
 
     pages = [{"page": i + 1, "status": "ok", "blocks": []} for i in range(len(pages_meta))]
 
+    clamp_cnt = [0]
+    drop_cnt = [0]
+
     def emit(page_no, btype, level, text, bb, height):
         if page_no is None or not text:
             return
@@ -325,18 +328,30 @@ def docling_extract(req: dict) -> dict:
         if idx < 0 or idx >= len(pages):
             return
         meta = pages_meta[idx]
+        vb = meta["view_box"]
         x0, y0, x1, y1 = bb
-        # docling：坐标单位为页面点；coord_origin=TOPLEFT 时 y 自顶向下
-        origin = "topleft"
-        pdf_bbox = [
-            meta["view_box"][0] + min(x0, x1),
-            meta["view_box"][1] + (height - max(y0, y1)),
-            meta["view_box"][0] + max(x0, x1),
-            meta["view_box"][1] + (height - min(y0, y1)),
-        ]
-        _ = origin
+        # docling bbox：页面顶左原点、y 向下的页面单位——单位未必是点（实测混过像素：
+        # y=1568 在 880pt 页上越界，一个坏块曾毁掉 230/364 页的整本书导入）。
+        # 按 docling 自报页高与 view_box 页高等比映射（单位由页高关系确定，非猜测），
+        # 最后夹进 view_box 兜底；整块越界的丢弃并计数——单块问题不得升级成整书失败。
+        src_h = float(height or 0) or (float(vb[3]) - float(vb[1]))
+        dst_h = (float(vb[3]) - float(vb[1])) or 1.0
+        s = dst_h / src_h
+        fy0 = src_h - max(y0, y1)
+        fy1 = src_h - min(y0, y1)
+        pdf_bbox = [float(vb[0]) + min(x0, x1) * s, float(vb[1]) + fy0 * s,
+                    float(vb[0]) + max(x0, x1) * s, float(vb[1]) + fy1 * s]
+        clamped = [min(max(pdf_bbox[0], float(vb[0])), float(vb[2])),
+                   min(max(pdf_bbox[1], float(vb[1])), float(vb[3])),
+                   min(max(pdf_bbox[2], float(vb[0])), float(vb[2])),
+                   min(max(pdf_bbox[3], float(vb[1])), float(vb[3]))]
+        if clamped[0] >= clamped[2] or clamped[1] >= clamped[3]:
+            drop_cnt[0] += 1
+            return
+        if clamped != pdf_bbox:
+            clamp_cnt[0] += 1
         pages[idx]["blocks"].append({"type": btype, "level": level, "text": text.strip(),
-                                     "bbox": pdf_bbox})
+                                     "bbox": clamped})
 
     page_heights = {}
     for page_no, page in (getattr(doc, "pages", {}) or {}).items():
@@ -361,6 +376,10 @@ def docling_extract(req: dict) -> dict:
     for page in pages:
         if not page["blocks"]:
             page["status"] = "blank"
+    if clamp_cnt[0]:
+        warnings.append(f"{clamp_cnt[0]} 个块坐标越界，已夹到页面范围")
+    if drop_cnt[0]:
+        warnings.append(f"{drop_cnt[0]} 个块整块越界，已丢弃（不猜位置）")
 
     return {
         "ok": True,

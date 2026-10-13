@@ -631,6 +631,7 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
     page_records: list[dict] = []
     pending: list[dict] = []
     failed = 0
+    coord_skipped: list[str] = []
     figure_seq = 0
     ocr_pages_used = 0
 
@@ -670,7 +671,10 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
             try:
                 bbox = validate_bbox(bbox, view_box)
             except Exception as exc:
-                raise PipelineError(f"第 {i + 1} 页块 {idx} 坐标非法: {exc}")
+                # 单块坐标非法不得炸整本书（实测一个坏块毁掉 230/364 页的导入）：
+                # 跳过该块并记录，页面与文档继续；页面级失败仍走 failed/5% 闸
+                coord_skipped.append(f"第 {i + 1} 页块 {idx}: {exc}")
+                continue
             item = {
                 "type": blk.get("type", "paragraph"),
                 "level": int(blk.get("level", 0) or 0),
@@ -759,6 +763,9 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
             "parse_status": p["status"],
         })
 
+    if coord_skipped:
+        print(f"[ingest] 警告：{len(coord_skipped)} 个块坐标非法已跳过（不炸整书）："
+              + "；".join(coord_skipped[:5]), file=sys.stderr)
     if n_pages and failed / n_pages > 0.05:
         raise PipelineError(f"失败页数 {failed}/{n_pages} 超过 5%，请更换解析器")
 
