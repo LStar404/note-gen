@@ -27,15 +27,22 @@ export default function BlockActionModals() {
   const [proposal, setProposal] = useState("");
   const [original, setOriginal] = useState("");
   const [search, setSearch] = useState("");
+  // 跨章关联必须用全书块列表：store.blocks 只有当前章（曾导致跨章链不上、chip 显示原始 id）
+  const [allBlocks, setAllBlocks] = useState<any[]>([]);
 
   const activeId = aiId ?? linkId;
   const block = blocks.find((b) => b.id === activeId);
+  const scopeBlocks = allBlocks.length ? allBlocks : blocks;
 
   useEffect(() => {
     setInstruction("");
     setProposal("");
     setOriginal("");
     setSearch("");
+    if (linkId && docId) {
+      void api.listAllBlocks(docId).then((r) => setAllBlocks(r.items ?? [])).catch(() => setAllBlocks([]));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
 
   const runAi = async () => {
@@ -95,7 +102,7 @@ export default function BlockActionModals() {
     }
   };
 
-  const others = blocks.filter(
+  const others = scopeBlocks.filter(
     (b) => b.id !== linkId && !b.deleted_at
       && ((b.title ?? "") + (b.content ?? "")).toLowerCase().includes(search.toLowerCase()),
   );
@@ -163,7 +170,7 @@ export default function BlockActionModals() {
             {(block.links ?? []).length > 0 && (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "8px 0" }}>
                 {(block.links ?? []).map((ln) => {
-                  const t = blocks.find((b) => b.id === ln);
+                  const t = scopeBlocks.find((b) => b.id === ln);
                   return (
                     <span key={ln} className="badge">
                       {t ? t.title : ln}

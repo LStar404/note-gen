@@ -51,6 +51,8 @@ export const api = {
   listDocs: () => api.get<{ docs: DocSummary[] }>("/api/v1/docs"),
   blockTypes: () => api.get<{ profile: string; types: any[]; presets: string[]; custom: any[] }>(
     "/api/v1/block-types"),
+  listAllBlocks: (docId: string) =>
+    api.get<{ items: NoteBlock[] }>("/api/v1/docs/" + docId + "/blocks"),
   blockAiEdit: (docId: string, blockId: string, instruction: string) =>
     api.post<{ block_id: string; proposal: string; original: string }>(
       "/api/v1/docs/" + docId + "/blocks/" + blockId + "/ai-edit", { instruction }),
