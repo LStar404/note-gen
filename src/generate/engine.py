@@ -242,7 +242,10 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
         batch_done: dict[int, int] = {}
         fill_futs: list = []
         batch_seq = [0]
-        fill_pool = (ThreadPoolExecutor(max_workers=max(1, min(4, fill_conc)))
+        # 外层分派池放开到 fill_conc：曾钳在 4 使多批填充最多 4 路并行（实测有效并发 4.2，
+        # 而配置的并发是 10）；真正的总闸是 LLMClient 的 max_concurrent_requests 信号量，
+        # 等闸时间记入 wait_seconds，多开线程无害
+        fill_pool = (ThreadPoolExecutor(max_workers=max(1, fill_conc))
                      if pipelined else None)
 
         def _fill_progress(idx: int):

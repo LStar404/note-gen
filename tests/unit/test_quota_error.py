@@ -23,9 +23,10 @@ class _FakeResp:
 
 
 def _call(monkeypatch, resp):
-    import httpx
+    from types import SimpleNamespace
 
-    monkeypatch.setattr(httpx, "post", lambda *a, **k: resp)
+    monkeypatch.setattr(OpenAICompatAdapter, "_get_client",
+                        lambda self: SimpleNamespace(post=lambda *a, **k: resp))
     adapter = OpenAICompatAdapter("mimo", "https://example.invalid/v1", "k", timeout=5)
     return adapter.complete("mimo-v2.6-flash", [{"role": "user", "content": "hi"}], None, 8)
 

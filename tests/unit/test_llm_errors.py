@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -36,7 +38,9 @@ def _adapter(monkeypatch, *, resp=None, exc: Exception | None = None,
             raise exc
         return resp
 
-    monkeypatch.setattr(httpx, "post", fake_post)
+    # 桩点在持久连接池上（连接复用后请求经 Client.post 发出，不再是 httpx.post）
+    monkeypatch.setattr(OpenAICompatAdapter, "_get_client",
+                        lambda self: SimpleNamespace(post=fake_post))
     return OpenAICompatAdapter("deepseek", "https://api.deepseek.com", "sk-x")
 
 

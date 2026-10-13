@@ -147,12 +147,17 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
         # motivation 配额按批内锚点占比折算：分批变小后每批都喊「最多 6 个」
         # 会让一章冒出几十个 motivation 块（意图是每章 ≤6）
         n_motivation = max(1, round(mot_total * len(batch) / max(1, len(anchors))))
+        # 分批硬上限进提示词（1.5.0）：先让模型按上限出块，而不是「生成后剪枝」白烧
+        # 输出 tokens——实测 6/6 批产出即超限被剪，剪掉的全是已生成的 token
+        batch_cap = max(1, math.ceil(size_cap * len(batch) / max(1, len(anchors))))
         prompt = OUTLINE_PROMPT.format(
             doc_kind="论文" if profile == "paper" else "教材",
             book_title=manifest.get("title", ""),
             chapter_part="整篇" if profile == "paper" else f"第 {chapter.get('title', chapter_id)} 章",
             n_motivation=n_motivation,
             n_anchors=len(anchors),
+            n_batch=len(batch),
+            batch_cap=batch_cap,
             size_note=size_note,
             anchor_summaries="\n".join(anchor_summary_line(a) for a in batch),
             outline_schema=compact_schema(schema),
@@ -211,7 +216,6 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
                 items = validate_outline_payload(payload, anchor_ids=anchor_ids, profile=profile)
                 # 章体量硬上限（前言/小章）：按批占比折算截断，防小章注水
                 if size_cap is not None and len(items) > 1:
-                    batch_cap = max(1, math.ceil(size_cap * len(batch) / max(1, len(anchors))))
                     if len(items) > batch_cap:
                         items = _trim_to_cap(items, batch_cap)
                         sub.errors.append(f"batch {bi}: 超出章体量上限，已剪除多余 link/motivation/figure")

@@ -65,11 +65,30 @@ class OpenAICompatAdapter:
     """面向 Chat Completions 兼容端点（OpenAI/DeepSeek/Qwen/Kimi/GLM/Ollama/vLLM）。"""
 
     def __init__(self, provider_id: str, base_url: str, api_key: str | None = None,
-                 timeout: float = 120.0):
+                 timeout: float = 120.0, transport: Any = None):
         self.provider_id = provider_id
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self._transport = transport      # 测试注入口（httpx.MockTransport）；生产为 None
+        self._client = None              # 持久连接池（懒建）：跨调用复用 TCP+TLS
+        self._client_lock = threading.Lock()
+
+    def _get_client(self):
+        """持久 httpx.Client：每调用新建连接曾白付一次 TCP+TLS 握手（几十次调用/章）。
+        httpx.Client 的连接池天生线程安全，可并发复用。"""
+        import httpx
+
+        with self._client_lock:
+            if self._client is None:
+                self._client = httpx.Client(timeout=self.timeout, transport=self._transport)
+            return self._client
+
+    def close(self) -> None:
+        with self._client_lock:
+            if self._client is not None:
+                self._client.close()
+                self._client = None
 
     def complete(self, model: str, messages: list[dict], schema: dict | None,
                  max_tokens: int, temperature: float | None = None,
@@ -77,8 +96,6 @@ class OpenAICompatAdapter:
                  json_schema: bool = True, context: dict | None = None,
                  reasoning_effort: str | None = None,
                  thinking: dict | None = None) -> dict:
-        import httpx
-
         body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if thinking:
             # 思考开关（DeepSeek 实测：disabled 同题 1.9s/230 tokens vs 开思考 9.4s/2020）；
@@ -110,8 +127,8 @@ class OpenAICompatAdapter:
             headers["Authorization"] = f"Bearer {self.api_key}"
         request_id = "req_" + uuid.uuid4().hex[:16]
         try:
-            resp = httpx.post(self.base_url + "/chat/completions", json=body, headers=headers,
-                              timeout=self.timeout)
+            resp = self._get_client().post(self.base_url + "/chat/completions", json=body,
+                                           headers=headers, timeout=self.timeout)
         except Exception as exc:  # 传输层失败按可重试处理（10.4）
             raise RetryableError(f"LLM 请求失败: {exc}")
         upstream = _upstream_message(resp)

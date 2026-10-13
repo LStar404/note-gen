@@ -42,14 +42,21 @@ def _read_request() -> dict:
 
 
 def _write(obj: dict, req: dict | None = None) -> None:
-    """结果优先写入 output_path（UTF-8），避免 stdout 被第三方日志污染导致解析失败。"""
+    """结果优先写入 output_path（UTF-8），避免 stdout 被第三方日志污染导致解析失败。
+
+    落盘失败不得吞结果（实测：低完整性解释器写不了中完整性临时目录、杀软瞬时锁
+    都会 PermissionError）：退回 stdout 契约，父进程 _decode_worker_stdout 兜底解析。"""
     payload = json.dumps(obj, ensure_ascii=False)
     out_path = (req or {}).get("output_path")
     if out_path:
-        Path(out_path).write_text(payload, encoding="utf-8")
-        sys.stdout.write("RESULT_OK")
-    else:
-        sys.stdout.write(payload)
+        try:
+            Path(out_path).write_text(payload, encoding="utf-8")
+            sys.stdout.write("RESULT_OK")
+            sys.stdout.flush()
+            return
+        except OSError:
+            pass
+    sys.stdout.write(payload)
     sys.stdout.flush()
 
 

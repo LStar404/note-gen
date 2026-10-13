@@ -214,15 +214,47 @@ def _spans_to_blocks(spans: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Marker / Docling 适配器（默认候选，见 5.1 选型表）：经 parser_workers 子进程运行重型依赖
 # ---------------------------------------------------------------------------
+_WORKER_PY_CACHE: dict[str, str] = {}
+
+
+def _worker_can_write(python: str) -> bool:
+    """健康探针：该解释器能否写父进程创建的临时文件。
+
+    实测教训：.venv-parsers 的 python.exe 曾被低完整性标签污染（受限环境创建 venv
+    传染），低完整性进程禁止向上写中完整性对象——worker 全体落盘 PermissionError，
+    连 tempfile.gettempdir() 都回退到 CWD。一次探针（~0.2s，按解释器缓存）换掉
+    一串莫名其妙的解析失败。"""
+    import subprocess
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "probe.json"
+            code = ("import pathlib,sys;"
+                    "pathlib.Path(sys.argv[1]).write_text('ok', encoding='utf-8')")
+            proc = subprocess.run([python, "-c", code, str(target)],
+                                  capture_output=True, timeout=60)
+            return proc.returncode == 0 and target.exists()
+    except Exception:
+        return False
+
+
 def resolve_worker_python(explicit: str | None = None) -> str:
-    """worker 解释器：显式配置 > .venv-parsers > 当前解释器（ADR D31）。"""
+    """worker 解释器：显式配置 > .venv-parsers > 当前解释器（ADR D31）。
+
+    .venv-parsers 候选必须通过写盘探针，否则退回当前解释器：pymupdf 等主环境可用
+    （图资源刷新照常工作），marker/docling 缺依赖时报清晰的「不可用」而不是
+    低完整性写盘的 PermissionError。"""
     if explicit:
         return explicit
     root = Path(__file__).resolve().parents[2]
     for cand in (root / ".venv-parsers" / "Scripts" / "python.exe",
                  root / ".venv-parsers" / "bin" / "python"):
         if cand.exists():
-            return str(cand)
+            key = str(cand)
+            if key not in _WORKER_PY_CACHE:
+                _WORKER_PY_CACHE[key] = key if _worker_can_write(key) else sys.executable
+            return _WORKER_PY_CACHE[key]
     return sys.executable
 
 

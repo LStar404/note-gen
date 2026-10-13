@@ -7,7 +7,8 @@
 
 from __future__ import annotations
 
-import httpx
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -36,7 +37,8 @@ def bodies(monkeypatch):
         sent.append(json)
         return FakeResp()
 
-    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(OpenAICompatAdapter, "_get_client",
+                        lambda self: SimpleNamespace(post=fake_post))
     return sent
 
 

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from src.core.block_types import type_enum
 
-PROMPT_VERSION = "1.4.0"   # 1.4.0: 引文短化（输出 tokens 大头是 quote 回显）+ tags 精简
+PROMPT_VERSION = "1.5.0"   # 1.5.0: 空 sources 块规则（link 编造来源曾致返工风暴）+ 提纲分批硬上限
+# 1.4.0: 引文短化（输出 tokens 大头是 quote 回显）+ tags 精简
 
 import json as _json
 
@@ -30,6 +31,7 @@ SYSTEM_PROMPT = """你是教材笔记生成助手。你的任务是把教材原�
 
 OUTLINE_PROMPT = """请生成教材章节的笔记块提纲 JSON，规则：
 - 体量控制：本章共 {n_anchors} 条锚点。{size_note}
+- 本批只处理 {n_batch} 条锚点，最多输出 {batch_cap} 个条目（motivation/link/figure 严格不超；定义/定理必保全覆盖，数量不受此限）；
 - 覆盖本章全部定义（definition）与定理（theorem），不得遗漏；
 - 为关键概念各配 motivation（最多 {n_motivation} 个）；
 - 对含图锚点生成 figure 块；
@@ -49,6 +51,8 @@ FILL_MANY_PROMPT = """请为给定的多个笔记块分别生成内容（md/LaTe
 - 每个块独立成条放入 fills 数组，temp_id 必须与给定块一致，不得增删块；
 - definition/theorem：严格复述原文语义，公式用 LaTeX，可补充等价表述但不得改变含义；
 - motivation：说明引入动机与直觉，可综合归纳（此时 sources 置空、basis=synthesis）；
+- link：延伸链接块一律无来源——sources_patch 返回 []，basis=synthesis；
+- 凡块定义 sources 为空：sources_patch 必须返回 []、basis=synthesis，严禁编造锚点 id 或引文；
 - figure：输出图片占位符（按资料给出的占位）、图注与解读文字；
 - 返回完整 sources_patch 与 basis；未修改时返回原值，不能省略；修正只用该块实际提供的锚点 id；
 - sources_patch 的 quote 必须**逐字照抄**该块锚点原文中的连续片段（≤50 字）：禁止改写、翻译、加省略号/补标点/合并片段，只截取不改字；
@@ -63,6 +67,8 @@ FILL_MANY_PROMPT = """请为给定的多个笔记块分别生成内容（md/LaTe
 FILL_PROMPT = """请生成笔记块的内容（md/LaTeX），要求：
 - definition/theorem：严格复述原文语义，公式用 LaTeX，可补充等价表述但不得改变含义；
 - motivation：说明引入动机与直觉，可综合归纳（此时 sources 置空、basis=synthesis）；
+- link：延伸链接块一律无来源——sources_patch 返回 []，basis=synthesis；
+- 凡块定义 sources 为空：sources_patch 必须返回 []、basis=synthesis，严禁编造锚点 id 或引文；
 - figure：输出图片占位符（按资料给出的占位）、图注与解读文字；
 - 返回完整 sources_patch 与 basis；未修改时返回原值，不能省略；修正只用本次实际提供的锚点 id；
 - sources_patch 的 quote 必须**逐字照抄**锚点原文中的连续片段（≤50 字）：禁止改写、翻译、加省略号/补标点/合并片段，只截取不改字；

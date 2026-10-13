@@ -152,23 +152,17 @@ def _failed_result(spec: dict, errors: list[str]) -> dict:
             "sources_patch": spec.get("sources", []), "basis": spec.get("basis", "anchored")}
 
 
-def fill_many(client: LLMClient, *, doc_id: str, chapter_id: str, specs: list[dict],
-              anchors_by_id: dict[str, dict], anchors: list[dict], model: str | None,
-              config: dict, by_id: dict[str, dict], budget: BudgetGuard | None = None,
-              task_id: str | None = None) -> dict[str, dict]:
-    """一次调用填充多个块（小块合批提速，调用数降为 1/N）。
-
-    批量输出整体非法或个别块校验失败时，回退 fill_one 逐块填充兜底——
-    合批只提吞吐，不牺牲单块质量。配额/调用层错误同样按块隔离返回失败结果。
-    """
-    profile = config.get("_profile", "textbook")
-    schema = build_fill_many_schema(profile)
+def _fill_many_parts(specs: list[dict], anchors_by_id: dict[str, dict],
+                     by_id: dict[str, dict], src_chars: int) -> tuple[str, dict[str, list[str]]]:
+    """拼装批量提示词的块资料段；返回 (资料文本, temp_id→允许锚点 id)。"""
     parts: list[str] = []
+    allowed: dict[str, list[str]] = {}
     for i, spec in enumerate(specs):
         source_ids = [s["anchor_id"] for s in spec.get("sources", [])
                       if s.get("anchor_id") in anchors_by_id]
+        allowed[spec["temp_id"]] = source_ids
         fulltexts = "\n\n".join(
-            f"[{aid}] {anchors_by_id[aid].get('content', '')[:1200]}" for aid in source_ids)
+            f"[{aid}] {anchors_by_id[aid].get('content', '')[:src_chars]}" for aid in source_ids)
         fig_id = next((s.get("figure_id") for s in spec.get("sources", [])
                        if s.get("figure_id")), "fig_00000000")
         related = [by_id[d]["title"] for d in spec.get("depends_on", []) if d in by_id]
@@ -180,32 +174,46 @@ def fill_many(client: LLMClient, *, doc_id: str, chapter_id: str, specs: list[di
                           ("temp_id", "type", "title", "basis", "sources", "depends_on")},
                          ensure_ascii=False)
             + "\n来源原文：\n" + (fulltexts or "（无：basis=synthesis）"))
+    return "\n\n".join(parts), allowed
+
+
+def _fill_many_attempt(client: LLMClient, *, doc_id: str, chapter_id: str, specs: list[dict],
+                       anchors_by_id: dict[str, dict], model: str | None, config: dict,
+                       by_id: dict[str, dict], budget: BudgetGuard | None,
+                       task_id: str | None, hint: str = "") -> tuple[dict[str, dict], dict[str, str]]:
+    """一次批量填充调用；返回 (通过的块, 被拒的块 temp_id→原因)。
+
+    只做校验级拒绝（缺块/字段非法/引文编造），原因供整批纠正重试；
+    LLM 调用层错误（配额/超时/限流）直接抛出，由 fill_many 按块隔离。
+    """
+    profile = config.get("_profile", "textbook")
+    schema = build_fill_many_schema(profile)
+    max_in = int(config.get("generate", {}).get("fill_max_in", 8000))
+    blocks_text, allowed = _fill_many_parts(specs, anchors_by_id, by_id, 800)
     prompt = FILL_MANY_PROMPT.format(
         n=len(specs),
-        blocks_fulltexts="\n\n".join(parts),
+        blocks_fulltexts=blocks_text,
         fill_many_schema=compact_schema(schema),
     ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
+    if estimate_tokens(prompt) > max_in:
+        # 超预算：先裁剪来源原文（保留锚点 id 与结构）——与 fill_one 的护栏一致
+        blocks_text, allowed = _fill_many_parts(specs, anchors_by_id, by_id, 600)
+        prompt = FILL_MANY_PROMPT.format(
+            n=len(specs),
+            blocks_fulltexts=blocks_text,
+            fill_many_schema=compact_schema(schema),
+        ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+    if hint:
+        messages.append({"role": "user", "content": hint})
     max_out = int(config.get("generate", {}).get("fill_max_out", 6000))
-    try:
-        resp = client.complete("fill", messages, schema=schema,
-                               max_tokens=max_out * min(3, len(specs)),
-                               temperature=config.get("generate", {}).get("temperature"),
-                               model=model, doc_id=doc_id, chapter_id=chapter_id,
-                               task_id=task_id, budget=budget)
-    except TaskCancelled:
-        raise
-    except QuotaExhausted as exc:
-        return {s["temp_id"]: _failed_result(s, [str(exc.message)]) for s in specs}
-    except (LLMError, RetryableError) as exc:
-        return {s["temp_id"]: _failed_result(s, [f"LLM 调用失败: {exc.message}"]) for s in specs}
-    except PriceUnknown as exc:
-        if exc.code != "BUDGET_EXCEEDED":
-            raise
-        return {s["temp_id"]: _failed_result(s, [exc.message]) for s in specs}
-
+    resp = client.complete("fill", messages, schema=schema,
+                           max_tokens=max_out * min(3, len(specs)),
+                           temperature=config.get("generate", {}).get("temperature"),
+                           model=model, doc_id=doc_id, chapter_id=chapter_id,
+                           task_id=task_id, budget=budget)
     out: dict[str, dict] = {}
-    need_single: list[dict] = []
+    rejected: dict[str, str] = {}
     try:
         payload = parse_json_output(resp.get("output") if resp.get("output") is not None
                                     else resp.get("raw_text", ""))
@@ -219,25 +227,75 @@ def fill_many(client: LLMClient, *, doc_id: str, chapter_id: str, specs: list[di
                     and not fills[i].get("temp_id"):
                 item = fills[i]     # 位置对齐兜底：模型偶发漏写 temp_id（不得整批回退单块）
             if item is None:
-                need_single.append(spec)
+                rejected[spec["temp_id"]] = "未出现在批量输出中"
                 continue
             try:
-                source_ids = [s["anchor_id"] for s in spec.get("sources", [])
-                              if s.get("anchor_id") in anchors_by_id]
-                validate_fill_payload(item, allowed_anchor_ids=set(source_ids),
+                validate_fill_payload(item, allowed_anchor_ids=set(allowed[spec["temp_id"]]),
                                       anchors_by_id=anchors_by_id, spec=spec)
-            except SchemaViolation:
-                need_single.append(spec)
+            except SchemaViolation as exc:
+                rejected[spec["temp_id"]] = str(exc.message)
                 continue
             ok, latex_warnings = check_latex(item.get("content", ""))
             item.setdefault("_warnings", []).extend(latex_warnings)
             item["_status"] = "ok" if ok else "needs_review"
             item["_temp_id"] = spec["temp_id"]
             out[spec["temp_id"]] = item
-    except SchemaViolation:
-        need_single = list(specs)
-    # 未通过的块逐块兜底（fill_one 自带修复重试）
-    for spec in need_single:
+    except SchemaViolation as exc:
+        return {}, {s["temp_id"]: str(exc.message) for s in specs}
+    return out, rejected
+
+
+def fill_many(client: LLMClient, *, doc_id: str, chapter_id: str, specs: list[dict],
+              anchors_by_id: dict[str, dict], anchors: list[dict], model: str | None,
+              config: dict, by_id: dict[str, dict], budget: BudgetGuard | None = None,
+              task_id: str | None = None) -> dict[str, dict]:
+    """一次调用填充多个块（小块合批提速，调用数降为 1/N）。
+
+    批量输出被拒时先做一轮「整批纠正」：校验原因随提示带回、N 块仍只花一次调用；
+    纠正后仍失败的块才回退 fill_one 逐块兜底。整批被拒曾直接触发 N 次逐块返工
+    （实测 8 块烧 18 次调用、约半数输出 tokens 作废），纠正轮把这种风暴压到 ≤2 次调用。
+    合批只提吞吐，不牺牲单块质量；配额/调用层错误同样按块隔离返回失败结果。
+    """
+    out: dict[str, dict] = {}
+    attempt_specs = list(specs)
+    hint = ""
+    for round_no in range(2):
+        if not attempt_specs:
+            break
+        try:
+            accepted, rejected = _fill_many_attempt(
+                client, doc_id=doc_id, chapter_id=chapter_id, specs=attempt_specs,
+                anchors_by_id=anchors_by_id, model=model, config=config, by_id=by_id,
+                budget=budget, task_id=task_id, hint=hint)
+        except TaskCancelled:
+            raise
+        except QuotaExhausted as exc:
+            out.update({s["temp_id"]: _failed_result(s, [str(exc.message)]) for s in attempt_specs})
+            return out
+        except (LLMError, RetryableError) as exc:
+            out.update({s["temp_id"]: _failed_result(s, [f"LLM 调用失败: {exc.message}"])
+                        for s in attempt_specs})
+            return out
+        except PriceUnknown as exc:
+            if exc.code != "BUDGET_EXCEEDED":
+                raise             # 配置类价格问题 → 任务清晰失败
+            out.update({s["temp_id"]: _failed_result(s, [exc.message]) for s in attempt_specs})
+            return out
+        out.update(accepted)
+        if not rejected:
+            break
+        if round_no == 0 and len(rejected) >= 2:
+            # 整批纠正（≥2 块才值得）：一次调用伺候全部被拒块，先于逐块兜底
+            attempt_specs = [s for s in attempt_specs if s["temp_id"] in rejected]
+            hint = ("上一轮输出校验失败，请逐块修正后重新输出这些块的 fills"
+                    "（只输出下列修正块，temp_id 保持不变）：\n"
+                    + "\n".join(f"- {tid}: {msg}" for tid, msg in rejected.items()))
+            continue
+        break
+    # 仍未通过的块逐块兜底（fill_one 自带修复重试）
+    for spec in specs:
+        if spec["temp_id"] in out:
+            continue
         out[spec["temp_id"]] = fill_one(
             client, doc_id=doc_id, chapter_id=chapter_id, spec=spec,
             anchors_by_id=anchors_by_id, anchors=anchors, model=model, config=config,
