@@ -8,6 +8,7 @@ from typing import Callable
 
 from src.core.errors import (LLMError, PriceUnknown, QuotaExhausted, RetryableError,
                              SchemaViolation, TaskCancelled)
+from src.core.block_types import type_guide
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
@@ -56,6 +57,7 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
                                     ("temp_id", "type", "title", "basis", "sources", "depends_on")},
                                    ensure_ascii=False),
         source_fulltexts=fulltexts,
+        type_guide=type_guide(profile),
         fill_schema=compact_schema(schema),
     ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
@@ -71,6 +73,7 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
                                         ("temp_id", "type", "title", "basis", "sources", "depends_on")},
                                        ensure_ascii=False),
             source_fulltexts=shorter,
+            type_guide=type_guide(profile),
             fill_schema=compact_schema(schema),
         ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
@@ -193,6 +196,7 @@ def _fill_many_attempt(client: LLMClient, *, doc_id: str, chapter_id: str, specs
     prompt = FILL_MANY_PROMPT.format(
         n=len(specs),
         blocks_fulltexts=blocks_text,
+        type_guide=type_guide(profile),
         fill_many_schema=compact_schema(schema),
     ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
     if estimate_tokens(prompt) > max_in:
@@ -201,6 +205,7 @@ def _fill_many_attempt(client: LLMClient, *, doc_id: str, chapter_id: str, specs
         prompt = FILL_MANY_PROMPT.format(
             n=len(specs),
             blocks_fulltexts=blocks_text,
+            type_guide=type_guide(profile),
             fill_many_schema=compact_schema(schema),
         ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]

@@ -37,6 +37,8 @@ DEFAULTS: dict[str, Any] = {
         "outline_batch_out": 8000, # 提纲分批目标（预计输出 token/批）
         "chapter_concurrency": 2,  # 整本生成并行章数
         "max_concurrent_requests": 8,  # 全局在途 LLM 请求上限
+        "profile": "textbook",   # 笔记模板：textbook/paper/physics/cs/medicine/chemistry 或自定义
+        "block_types": [],     # 用户自定义块类型（覆盖/追加预设）：[{id,name,icon,hint,source_policy,profiles}]
         "max_cost_per_chapter": 0.0,
         "temperature": 0.2,
         "output_language": "zh",      # zh | en | ja  生成笔记与导出标签语言

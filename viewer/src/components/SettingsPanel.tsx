@@ -124,7 +124,11 @@ export default function SettingsPanel() {
     try {
       await api.saveSettings({
         parser: settings.parser,
-        generate: { output_language: settings.generate?.output_language },
+        generate: {
+          output_language: settings.generate?.output_language,
+          profile: settings.generate?.profile,
+          block_types: settings.generate?.block_types ?? [],
+        },
         export: settings.export,
       });
       toast("设置已保存");
@@ -142,6 +146,75 @@ export default function SettingsPanel() {
     <div className="modal-mask" onClick={() => setOpen(false)}>
       <div className="modal wide" onClick={(e) => e.stopPropagation()}>
         <h2>设置</h2>
+
+        {/* ---------------- 笔记模板（学科预设 + 自定义块类型） ---------------- */}
+        <h3>笔记模板</h3>
+        <div className="kv">
+          <span>学科模板</span>
+          <select
+            value={settings?.generate?.profile || "textbook"}
+            onChange={(e) => setSettings({ ...settings, generate: { ...settings?.generate, profile: e.target.value } })}
+          >
+            <option value="textbook">数学 / 教材（定义·定理·动机）</option>
+            <option value="paper">论文（贡献·方法·实验）</option>
+            <option value="physics">物理（定律·现象·实验）</option>
+            <option value="cs">计算机（算法·数据结构·复杂度）</option>
+            <option value="medicine">医学（症状·诊断·治疗）</option>
+            <option value="chemistry">化学（物质·反应·性质）</option>
+          </select>
+        </div>
+        <div className="muted" style={{ margin: "6px 0" }}>
+          新导入的教材使用此模板（可在导入时按书覆盖）；模板决定生成时可用的块类型。
+        </div>
+        <h3>自定义块类型</h3>
+        {(settings?.generate?.block_types ?? []).map((t: any, i: number) => (
+          <div key={i} className="provider-row" style={{ display: "flex", gap: 6, margin: "4px 0", flexWrap: "wrap" }}>
+            <input placeholder="id（英文）" style={{ width: 90 }} value={t.id ?? ""}
+                   onChange={(e) => {
+                     const list = [...(settings.generate.block_types ?? [])];
+                     list[i] = { ...t, id: e.target.value };
+                     setSettings({ ...settings, generate: { ...settings.generate, block_types: list } });
+                   }} />
+            <input placeholder="名称" style={{ width: 80 }} value={t.name ?? ""}
+                   onChange={(e) => {
+                     const list = [...(settings.generate.block_types ?? [])];
+                     list[i] = { ...t, name: e.target.value };
+                     setSettings({ ...settings, generate: { ...settings.generate, block_types: list } });
+                   }} />
+            <input placeholder="图标" style={{ width: 48 }} value={t.icon ?? ""}
+                   onChange={(e) => {
+                     const list = [...(settings.generate.block_types ?? [])];
+                     list[i] = { ...t, icon: e.target.value };
+                     setSettings({ ...settings, generate: { ...settings.generate, block_types: list } });
+                   }} />
+            <input placeholder="写作指引（会进生成提示词，如：病例：主诉/现病史/处置）"
+                   style={{ flex: 1, minWidth: 220 }} value={t.hint ?? ""}
+                   onChange={(e) => {
+                     const list = [...(settings.generate.block_types ?? [])];
+                     list[i] = { ...t, hint: e.target.value };
+                     setSettings({ ...settings, generate: { ...settings.generate, block_types: list } });
+                   }} />
+            <select style={{ width: 96 }} value={t.source_policy ?? "required"}
+                    onChange={(e) => {
+                      const list = [...(settings.generate.block_types ?? [])];
+                      list[i] = { ...t, source_policy: e.target.value };
+                      setSettings({ ...settings, generate: { ...settings.generate, block_types: list } });
+                    }}>
+              <option value="required">需来源</option>
+              <option value="optional">来源可选</option>
+              <option value="none">无来源</option>
+            </select>
+            <button onClick={() => {
+              const list = (settings.generate.block_types ?? []).filter((_: any, j: number) => j !== i);
+              setSettings({ ...settings, generate: { ...settings.generate, block_types: list } });
+            }}>删除</button>
+          </div>
+        ))}
+        <button onClick={() => {
+          const list = [...(settings?.generate?.block_types ?? []),
+                        { id: "", name: "", icon: "📝", hint: "", source_policy: "required" }];
+          setSettings({ ...settings, generate: { ...settings?.generate, block_types: list } });
+        }}>+ 添加类型</button>
 
         {/* ---------------- 外观 ---------------- */}
         <h3>外观</h3>

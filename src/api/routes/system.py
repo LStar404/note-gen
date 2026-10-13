@@ -67,6 +67,23 @@ def update_routes(request: Request, body: dict):
     return {"routes": st.config.get("generate", {}).get("models", {})}
 
 
+@router.get("/api/v1/block-types")
+def block_types(request: Request):
+    """块类型注册表（学科预设 + 用户自定义）：前端图标/名称与生成同一事实源。"""
+    from src.core.block_types import active_types
+
+    st = state(request)
+    gen = st.config.get("generate", {}) or {}
+    profile = gen.get("profile") or "textbook"
+    types = [{"id": s.type_id, "name": s.cn_name, "icon": s.icon,
+              "source_policy": s.source_policy, "synthesis_allowed": s.synthesis_allowed,
+              "hint": s.hint, "profiles": list(s.profiles)}
+             for s in active_types(profile)]
+    return {"profile": profile, "types": types,
+            "presets": ["textbook", "paper", "physics", "cs", "medicine", "chemistry"],
+            "custom": gen.get("block_types") or []}
+
+
 @router.get("/api/v1/settings")
 def get_settings(request: Request):
     """应用设置（解析器/OCR/输出语言/导出编码/生成参数）。"""

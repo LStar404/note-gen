@@ -51,6 +51,7 @@ async def create_doc(request: Request, file: UploadFile = File(...), title: str 
                      profile: str = Form("textbook"), doc_id: str | None = Form(None),
                      overwrite: bool = Form(False)):
     st = state(request)
+    profile = profile or ((st.config.get("generate", {}) or {}).get("profile") or "textbook")
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in (".pdf", ".pptx"):
         raise InputError("只支持 PDF 与 PPTX 讲义")

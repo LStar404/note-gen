@@ -12,6 +12,7 @@ from typing import Callable
 
 from src.core.errors import (LLMError, PriceUnknown, QuotaExhausted, RetryableError,
                              SchemaViolation, TaskCancelled)
+from src.core.block_types import type_guide
 from src.core.llm import BudgetGuard, LLMClient
 from src.core.text import estimate_tokens
 
@@ -160,6 +161,7 @@ def generate_outline(client: LLMClient, *, doc_id: str, chapter_id: str, manifes
             batch_cap=batch_cap,
             size_note=size_note,
             anchor_summaries="\n".join(anchor_summary_line(a) for a in batch),
+            type_guide=type_guide(profile),
             outline_schema=compact_schema(schema),
         ) + "\n" + language_instruction((config.get("generate") or {}).get("output_language"))
         messages = [{"role": "system", "content": SYSTEM_PROMPT},

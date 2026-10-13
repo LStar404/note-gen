@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from src.core.block_types import type_enum
 
-PROMPT_VERSION = "1.5.0"   # 1.5.0: 空 sources 块规则（link 编造来源曾致返工风暴）+ 提纲分批硬上限
+PROMPT_VERSION = "1.6.0"   # 1.6.0: 类型写作指引由注册表注入（学科模板/自定义块类型）
+# 1.5.0: 空 sources 块规则（link 编造来源曾致返工风暴）+ 提纲分批硬上限
 # 1.4.0: 引文短化（输出 tokens 大头是 quote 回显）+ tags 精简
 
 import json as _json
@@ -32,9 +33,11 @@ SYSTEM_PROMPT = """你是教材笔记生成助手。你的任务是把教材原�
 OUTLINE_PROMPT = """请生成教材章节的笔记块提纲 JSON，规则：
 - 体量控制：本章共 {n_anchors} 条锚点。{size_note}
 - 本批只处理 {n_batch} 条锚点，最多输出 {batch_cap} 个条目（motivation/link/figure 严格不超；定义/定理必保全覆盖，数量不受此限）；
-- 覆盖本章全部定义（definition）与定理（theorem），不得遗漏；
-- 为关键概念各配 motivation（最多 {n_motivation} 个）；
+- 覆盖本章核心陈述类条目（definition/theorem/law/diagnosis 等）不得遗漏；
+- 为关键概念各配动机/引入类条目（motivation/现象等，最多 {n_motivation} 个）；
 - 对含图锚点生成 figure 块；
+- 各类型写作指引（type 只能取其中的 id）：
+{type_guide}
 - 每块 sources 只能从给定锚点 id 中选择；
 - 每块给出章内唯一 temp_id；depends_on 只引用本章 temp_id，无自环/循环；
 - 不为没有定义/定理的章节强造该类型，原文未给证明时不得补造；
@@ -49,8 +52,8 @@ OUTLINE_PROMPT = """请生成教材章节的笔记块提纲 JSON，规则：
 
 FILL_MANY_PROMPT = """请为给定的多个笔记块分别生成内容（md/LaTeX），要求：
 - 每个块独立成条放入 fills 数组，temp_id 必须与给定块一致，不得增删块；
-- definition/theorem：严格复述原文语义，公式用 LaTeX，可补充等价表述但不得改变含义；
-- motivation：说明引入动机与直觉，可综合归纳（此时 sources 置空、basis=synthesis）；
+- 各类型写作指引：
+{type_guide}
 - link：延伸链接块一律无来源——sources_patch 返回 []，basis=synthesis；
 - 凡块定义 sources 为空：sources_patch 必须返回 []、basis=synthesis，严禁编造锚点 id 或引文；
 - figure：输出图片占位符（按资料给出的占位）、图注与解读文字；
@@ -65,8 +68,8 @@ FILL_MANY_PROMPT = """请为给定的多个笔记块分别生成内容（md/LaTe
 </source_data>"""
 
 FILL_PROMPT = """请生成笔记块的内容（md/LaTeX），要求：
-- definition/theorem：严格复述原文语义，公式用 LaTeX，可补充等价表述但不得改变含义；
-- motivation：说明引入动机与直觉，可综合归纳（此时 sources 置空、basis=synthesis）；
+- 各类型写作指引：
+{type_guide}
 - link：延伸链接块一律无来源——sources_patch 返回 []，basis=synthesis；
 - 凡块定义 sources 为空：sources_patch 必须返回 []、basis=synthesis，严禁编造锚点 id 或引文；
 - figure：输出图片占位符（按资料给出的占位）、图注与解读文字；

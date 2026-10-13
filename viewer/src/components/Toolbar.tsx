@@ -287,6 +287,12 @@ export default function Toolbar() {
 
   useEffect(() => {
     void loadDocs();
+    // 块类型注册表（学科模板/自定义）：卡片图标与生成同一事实源
+    void api.blockTypes().then((r: any) => {
+      const map: Record<string, { name: string; icon: string }> = {};
+      for (const t of r.types ?? []) map[t.id] = { name: t.name, icon: t.icon };
+      useStore.setState({ typeInfo: map });
+    }).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -28,7 +28,9 @@ Basis = Literal["anchored", "synthesis"]
 CreatedBy = Literal["ai", "human", "agent"]
 ContentType = Literal["paragraph", "heading", "formula", "figure", "table", "ref_entry"]
 ParseStatus = Literal["ok", "blank", "failed"]
-Profile = Literal["textbook", "paper"]
+# profile 名开放：内置 textbook/paper/physics/cs/medicine/chemistry 等，
+# 用户自定义模板也用它命名（合法集由 block_types 解析，模型层只约束非空）
+Profile = str
 
 BLOCK_STATUSES = ("ai_generated", "hybrid", "manually_edited", "needs_review")
 CONTENT_FORMATS = ("md_latex", "tex", "plain")

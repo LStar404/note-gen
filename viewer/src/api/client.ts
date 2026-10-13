@@ -49,6 +49,8 @@ export const api = {
   del: <T>(url: string, body?: unknown) => request<T>("DELETE", url, body),
 
   listDocs: () => api.get<{ docs: DocSummary[] }>("/api/v1/docs"),
+  blockTypes: () => api.get<{ profile: string; types: any[]; presets: string[]; custom: any[] }>(
+    "/api/v1/block-types"),
   openPath: (path: string) => api.post<{ ok: boolean; path: string }>(
     "/api/v1/system/open-path", { path }),
   getManifest: (docId: string) => api.get<any>("/api/v1/docs/" + docId),

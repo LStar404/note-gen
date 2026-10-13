@@ -27,6 +27,7 @@ export default function NoteZoom() {
   const setHighlight = useStore((s) => s.setHighlight);
   const setPdfPage = useStore((s) => s.setPdfPage);
   const setToast = useStore((s) => s.setToast);
+  const typeInfo = useStore((s) => s.typeInfo);
 
   const block: NoteBlock | undefined = blocks.find((b) => b.id === zoomId);
 
@@ -62,7 +63,9 @@ export default function NoteZoom() {
     <div className="note-zoom-mask" onClick={closeZoom}>
       <div className="note-zoom" onClick={(e) => e.stopPropagation()}>
         <div className="note-zoom-head">
-          <span className="note-zoom-icon">{TYPE_ICON[block.type] ?? "📝"}</span>
+          <span className="note-zoom-icon" title={typeInfo[block.type]?.name ?? block.type}>
+            {typeInfo[block.type]?.icon ?? TYPE_ICON[block.type] ?? "📝"}
+          </span>
           <h2><MathText text={block.title} docId={docId ?? ""} /></h2>
           <span className={`badge status-${block.status}`}>{STATUS_CN[block.status] ?? block.status}</span>
           {block.generation_protected && <span className="badge protected">已保护</span>}

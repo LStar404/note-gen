@@ -34,6 +34,8 @@ interface Store {
   reviewOpen: boolean;
   reviewItems: NoteBlock[];
   reviewCount: number;
+  // 块类型注册表（学科模板 + 用户自定义）：卡片图标/名称与生成同一事实源
+  typeInfo: Record<string, { name: string; icon: string }>;
   toast: string | null;
   anchors: Record<string, Anchor>;
 
@@ -77,6 +79,7 @@ export const useStore = create<Store>((set, get) => ({
   reviewOpen: false,
   reviewItems: [],
   reviewCount: 0,
+  typeInfo: {},
   toast: null,
   anchors: {},
 

@@ -16,6 +16,10 @@ class AppState:
         self.root = Path(root).resolve()
         self.layout = Layout(self.root).ensure_base()
         self.config = load_config(self.root)
+        # 自定义块类型注入类型注册表（生成 schema/提示词/校验器/前端同一事实源）
+        from src.core.block_types import install_types
+
+        install_types((self.config.get("generate", {}) or {}).get("block_types"))
         self.runtime = RuntimeDB(self.layout.runtime_db)
         self.registry = ModelRegistry(self.layout)
         self.client = LLMClient(self.registry, self.runtime, self.config)
@@ -33,6 +37,9 @@ class AppState:
 
     def reload_config(self) -> dict:
         self.config = load_config(self.root)
+        from src.core.block_types import install_types
+
+        install_types((self.config.get("generate", {}) or {}).get("block_types"))
         # 热应用而非只换引用：thinking/推理深度/超时/并发上限都是客户端构造时固化的
         # 字段，只换 config 引用不会生效（设置改了没反应，要重启才生效）
         self.client.apply_config(self.config)

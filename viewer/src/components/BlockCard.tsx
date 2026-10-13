@@ -31,6 +31,7 @@ function BlockCard({ block, selected, onSelect }: {
   const pages = sourceKey.split("|");
   const setHighlight = useStore((s) => s.setHighlight);
   const openZoom = useStore((s) => s.openZoom);
+  const typeInfo = useStore((s) => s.typeInfo);
   const setPdfPage = useStore((s) => s.setPdfPage);
   const setToast = useStore((s) => s.setToast);
 
@@ -65,7 +66,9 @@ function BlockCard({ block, selected, onSelect }: {
       }}
     >
       <div className="block-head">
-        <span className="block-type">{TYPE_ICON[block.type] ?? "📝"}</span>
+        <span className="block-type" title={typeInfo[block.type]?.name ?? block.type}>
+          {typeInfo[block.type]?.icon ?? TYPE_ICON[block.type] ?? "📝"}
+        </span>
         <MathText className="block-title" text={block.title} docId={docId ?? ""} />
         <span className={`badge status-${block.status}`}>{STATUS_CN[block.status] ?? block.status}</span>
         {block.generation_protected && <span className="badge protected">已保护</span>}
