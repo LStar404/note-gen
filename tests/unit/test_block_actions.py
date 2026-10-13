@@ -13,7 +13,8 @@ class EditClient:
         return "fake/fake"
 
     def complete(self, task, messages, **kw):
-        assert kw.get("schema"), "AI 编辑必须走结构化输出"
+        # 改写是纯文本任务：json_schema 强制 JSON 与「不要输出 JSON」指令打架（实测回空格）
+        assert kw.get("schema") is None, "AI 改写不得用 JSON schema"
         return {"output": {"content": "修改后的笔记正文，保留 [1] 引文标记。"},
                 "usage": {}}
 
@@ -51,6 +52,47 @@ def test_ai_edit_propose_does_not_mutate_then_apply_records_history(sample_doc):
         snaps = [(h.get("snapshot") or {}).get("content") or "" for h in rows]
         assert any("修改后" in s for s in snaps), f"历史必须记录新内容: {snaps}"
         assert any("原始内容 A" in s for s in snaps), f"历史必须可回溯原内容: {snaps}"
+
+
+def test_ai_edit_handles_unstable_model_output_shapes(sample_doc):
+    """真实模型输出形状不稳（实测）：{text:...}/{md_latex:...} 套壳/纯文本/空白全接住。
+    json_schema 禁 JSON 与指令禁止 JSON 打架会让模型回空格——现已纯文本调用+解壳。"""
+    from src.api.routes.docs import _unwrap_proposal
+
+    assert _unwrap_proposal('{"md_latex": "正文内容"}') == "正文内容"
+    assert _unwrap_proposal("```\n正文\n```") == "正文"
+    assert _unwrap_proposal("普通正文") == "普通正文"
+
+    layout, doc_id = sample_doc
+    store = DocStore(layout, doc_id)
+    ch = store.chapter_ids()[0]
+    block = _seed(store, ch)
+
+    class TextShapeClient:
+        def route(self, task):
+            return "fake/fake"
+
+        def complete(self, task, messages, **kw):
+            assert kw.get("schema") is None, "改写不得用 JSON schema（与纯文本指令打架）"
+            return {"output": {"text": "改好的正文。"}, "usage": {}}
+
+    app = create_app(layout.root)
+    with TestClient(app, base_url="http://127.0.0.1:8787") as client:
+        headers = {"X-Local-Token": app.state.app_state.token_value}
+        app.state.app_state.client = TextShapeClient()
+        r = client.post(f"/api/v1/docs/{doc_id}/blocks/{block['id']}/ai-edit",
+                        json={"instruction": "更精简"}, headers=headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["proposal"] == "改好的正文。", r.json()
+
+        class SpaceClient(TextShapeClient):
+            def complete(self, task, messages, **kw):
+                return {"output": " " * 40, "usage": {}}
+
+        app.state.app_state.client = SpaceClient()
+        r = client.post(f"/api/v1/docs/{doc_id}/blocks/{block['id']}/ai-edit",
+                        json={"instruction": "更精简"}, headers=headers)
+        assert r.status_code == 400, "空白产出必须拒收: " + r.text
 
 
 def test_links_add_remove_and_validation(sample_doc):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import threading
 from pathlib import Path
 
@@ -290,8 +291,9 @@ def rename_doc(request: Request, doc_id: str, body: dict):
 
 
 AI_EDIT_PROMPT = """你是笔记编辑助手。请按用户指令修改下面这块笔记。
-要求：只输出修改后的笔记正文（md_latex）；保持引文标记 [n]、图片占位符 ![fig_xxxxxxxx]、
-公式 LaTeX 不受破坏；不得编造笔记之外的事实；没有要求修改的部分保持原样。
+要求：只输出修改后的笔记正文（Markdown 文本，公式用 LaTeX）；不要输出 JSON、不要输出代码围栏；
+保持引文标记 [n]、图片占位符 ![fig_xxxxxxxx]、公式 LaTeX 不受破坏；不得编造笔记之外的事实；
+没有要求修改的部分保持原样。
 块标题：{title}
 块类型：{type_id}
 用户指令：{instruction}
@@ -301,6 +303,25 @@ AI_EDIT_PROMPT = """你是笔记编辑助手。请按用户指令修改下面这
 </original>"""
 
 
+def _unwrap_proposal(text: str) -> str:
+    """提案解壳：模型偶尔把正文包成 JSON（如 {"md_latex": "..."}——实测于真实模型，
+    指令里的格式名被当成字段名）或代码围栏；不剥掉用户就会把 JSON 壳应用进正文。"""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+        t = re.sub(r"\s*```$", "", t).strip()
+    if t.startswith("{") and t.endswith("}"):
+        try:
+            obj = json.loads(t)
+            if isinstance(obj, dict):
+                vals = [str(v).strip() for v in obj.values() if isinstance(v, str) and str(v).strip()]
+                if len(vals) == 1:
+                    return vals[0]
+        except Exception:
+            pass
+    return t
+
+
 @router.post("/api/v1/docs/{doc_id}/blocks/{block_id}/ai-edit")
 def block_ai_edit(request: Request, doc_id: str, block_id: str, body: dict):
     """单块 AI 编辑：按指令产出修改建议（**不落盘**）；应用是显式人工动作（5.2）。"""
@@ -308,7 +329,8 @@ def block_ai_edit(request: Request, doc_id: str, block_id: str, body: dict):
 
     st = state(request)
     store = _DS(st.layout, doc_id)
-    block = store.blocks_by_id().get(block_id)
+    # include_deleted=False：blocks_by_id 默认含软删块，曾对已删块出 AI 建议
+    block = store.blocks_by_id(include_deleted=False).get(block_id)
     if not block:
         raise NotFound(f"块不存在: {block_id}")
     instruction = str((body or {}).get("instruction") or "").strip()
@@ -316,14 +338,23 @@ def block_ai_edit(request: Request, doc_id: str, block_id: str, body: dict):
         raise InputError("缺少修改指令")
     prompt = AI_EDIT_PROMPT.format(title=block.get("title", ""), type_id=block.get("type", ""),
                                    instruction=instruction, content=block.get("content", ""))
-    schema = {"type": "object", "properties": {"content": {"type": "string"}},
-              "required": ["content"], "additionalProperties": False}
+    # 不用 JSON schema：改写要的是纯文本，强制 json_schema 又禁止 JSON 会约束打架——
+    # 实测模型回一串空格摆烂；纯文本 + 解壳兜底才是稳的
     models = (st.config.get("generate", {}).get("models", {}) or {})
     model = models.get("fill") or models.get("default")
-    resp = st.client.complete("edit", [{"role": "user", "content": prompt}], schema=schema,
+    resp = st.client.complete("edit", [{"role": "user", "content": prompt}], schema=None,
                               max_tokens=6000, temperature=0.3, model=model)
-    out = resp.get("output") or {}
-    proposal = str(out.get("content") or "").strip()
+    out = resp.get("output")
+    # output 形状不稳（实测真实模型）：纯文本 / {content: ...} / {md_latex: ...} 套壳都出现过
+    if isinstance(out, str):
+        raw = out
+    else:
+        raw = str((out or {}).get("content") or "") or str((out or {}).get("text") or "")
+        if not raw.strip():
+            vals = [str(v).strip() for v in (out or {}).values()
+                    if isinstance(v, str) and str(v).strip()]
+            raw = max(vals, key=len) if vals else ""
+    proposal = _unwrap_proposal(raw)
     if not proposal:
         raise InputError("AI 没有产出修改建议，请换一种指令")
     return {"block_id": block_id, "proposal": proposal, "original": block.get("content", "")}
@@ -337,7 +368,7 @@ def block_apply_edit(request: Request, doc_id: str, block_id: str, body: dict):
 
     st = state(request)
     store = _DS(st.layout, doc_id)
-    if not store.blocks_by_id().get(block_id):
+    if not store.blocks_by_id(include_deleted=False).get(block_id):
         raise NotFound(f"块不存在: {block_id}")
     content = str((body or {}).get("content") or "")
     if not content.strip():
@@ -358,13 +389,13 @@ def block_add_link(request: Request, doc_id: str, block_id: str, body: dict):
 
     st = state(request)
     store = _DS(st.layout, doc_id)
-    block = store.blocks_by_id().get(block_id)
+    block = store.blocks_by_id(include_deleted=False).get(block_id)
     if not block:
         raise NotFound(f"块不存在: {block_id}")
     target = str((body or {}).get("target_id") or "").strip()
     if not target or target == block_id:
         raise InputError("目标块非法（不能关联自己）")
-    if not store.blocks_by_id().get(target):
+    if not store.blocks_by_id(include_deleted=False).get(target):
         raise NotFound(f"目标块不存在: {target}")
     links = list(dict.fromkeys(list(block.get("links") or []) + [target]))
     updated = store.update_block(block_id, {"links": links},
@@ -381,7 +412,7 @@ def block_remove_link(request: Request, doc_id: str, block_id: str, target_id: s
 
     st = state(request)
     store = _DS(st.layout, doc_id)
-    block = store.blocks_by_id().get(block_id)
+    block = store.blocks_by_id(include_deleted=False).get(block_id)
     if not block:
         raise NotFound(f"块不存在: {block_id}")
     links = [ln for ln in (block.get("links") or []) if ln != target_id]
