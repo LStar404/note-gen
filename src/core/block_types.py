@@ -161,7 +161,8 @@ def install_types(custom: list[dict] | None) -> list[str]:
                 policy,
                 rels or SOURCE_RELATIONS,
                 bool(item.get("synthesis_allowed")),
-                tuple(item.get("profiles") or _COMMON),
+                # 未指定 profiles 的自定义类型对全部模板生效（"*" = 通配）
+                tuple(item.get("profiles") or ("*",)),
                 str(item.get("hint") or ""))
         except Exception:
             bad.append(str(item.get("id") or "?"))
@@ -176,8 +177,14 @@ def get_type(type_id: str) -> BlockTypeSpec:
 
 
 def active_types(profile: str = "textbook") -> list[BlockTypeSpec]:
-    specs = [s for s in REGISTRY.values() if profile in s.profiles]
-    specs += [s for s in _CUSTOM.values() if profile in s.profiles]
+    specs = [s for s in REGISTRY.values()
+             if profile in s.profiles or "*" in s.profiles]
+    specs += [s for s in _CUSTOM.values()
+              if profile in s.profiles or "*" in s.profiles]
+    if not specs:
+        # 未知/自定义 profile 名下的类型集不得为空：枚举空集 = 生成器什么都产不出，
+        # 是静默哑火的悬崖；兜底回通用教材五类
+        specs = [s for s in REGISTRY.values() if "textbook" in s.profiles]
     return specs
 
 

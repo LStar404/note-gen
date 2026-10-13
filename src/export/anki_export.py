@@ -16,7 +16,15 @@ from src.core.store import DocStore
 
 from .render import figure_index, live_blocks, rewrite_citations
 
-CARD_TYPES = ("definition", "theorem", "motivation")
+# 闪卡类型 = 注册表中除纯视觉/延伸类以外的全部类型（学科模板的定律/算法/诊断等
+# 都是知识点，曾写死数学三类导致新模板的内容进不了牌组）
+NO_CARD_TYPES = ("figure", "link")
+
+
+def card_types() -> tuple[str, ...]:
+    from src.core.block_types import REGISTRY, _CUSTOM
+
+    return tuple(t for t in list(REGISTRY) + list(_CUSTOM) if t not in NO_CARD_TYPES)
 MATH_RE = re.compile(r"(\$\$.*?\$\$|\$.*?\$)", re.DOTALL)
 
 
@@ -90,7 +98,7 @@ def collect_cards(store: DocStore, chapter_id: str | None = None) -> list[dict]:
     cards: list[dict] = []
     for ch in chapters:
         for block in live_blocks(store.block_rows(ch)):
-            if block.get("type") not in CARD_TYPES:
+            if block.get("type") not in card_types():
                 continue
             content = rewrite_citations(block.get("content", ""), refs_by_num, mode="md")
             content = rewrite_figures_plain(content, figure_paths, figure_captions)

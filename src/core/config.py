@@ -58,6 +58,12 @@ THINKING_MODES = ("disabled", "enabled")
 
 
 def normalize_settings(cfg: dict) -> dict:
+    # 笔记模板字段兜底：profile 非法名交由 block_types 兜底，block_types 必须是列表
+    _gen = cfg.setdefault("generate", {})
+    if not isinstance(_gen.get("block_types"), list):
+        _gen["block_types"] = []
+    if not isinstance(_gen.get("profile"), str) or not str(_gen.get("profile")).strip():
+        _gen["profile"] = "textbook"
     """校验并归一化可选项（10.2 字段即规范）。"""
     enc = ((cfg.get("export") or {}).get("encoding") or "utf-8").lower()
     cfg.setdefault("export", {})["encoding"] = enc if enc in ENCODINGS else "utf-8"

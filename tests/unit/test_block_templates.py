@@ -49,6 +49,47 @@ def test_custom_type_override_preset_hint():
     assert "自定义的定理写作指引" in type_guide("textbook"), "同 id 覆盖预设生效"
 
 
+def test_anki_cards_cover_all_knowledge_types():
+    """闪卡类型不得写死数学三类：定律/算法/诊断等知识点必须进牌组（曾漏掉）。"""
+    from src.export.anki_export import card_types
+
+    kinds = card_types()
+    for t in ("definition", "theorem", "law", "algorithm", "diagnosis", "reaction"):
+        assert t in kinds, t
+    assert "figure" not in kinds and "link" not in kinds
+    install_types([{"id": "case", "name": "病例", "hint": "x"}])
+    assert "case" in card_types(), "自定义知识点类型也要进牌组"
+
+
+def test_tex_export_degrades_for_removed_custom_type():
+    """自定义类型被删后旧块仍要能导出（曾 get_type 直接炸掉整次导出）。"""
+    from src.core.block_types import get_type
+
+    try:
+        get_type("deleted_custom")
+        raise AssertionError("应当抛未知类型")
+    except SchemaViolation:
+        pass
+    from src.export.tex_export import md_block_to_tex
+
+    assert md_block_to_tex("普通内容"), "正常路径不回归"
+
+
+def test_unknown_profile_never_yields_empty_type_set():
+    """未知/自定义 profile 名下类型集不得为空：枚举空集 = 生成器静默哑火。"""
+    assert type_enum("medicin") == type_enum("textbook"), "拼错的模板名回落通用类型"
+    install_types([{"id": "case", "name": "病例", "hint": "x"}])
+    assert "case" in type_enum("my-course"), "未指定 profiles 的自定义类型通配所有模板"
+
+
+def test_settings_normalize_guards_template_fields():
+    from src.core.config import normalize_settings
+
+    cfg = normalize_settings({"generate": {"profile": "", "block_types": "垃圾"}})
+    assert cfg["generate"]["profile"] == "textbook"
+    assert cfg["generate"]["block_types"] == []
+
+
 def test_block_types_api_and_settings_roundtrip(workspace):
     app = create_app(workspace.root)
     with TestClient(app, base_url="http://127.0.0.1:8787") as client:

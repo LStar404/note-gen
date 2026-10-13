@@ -128,11 +128,16 @@ def put_settings(request: Request, body: dict):
     if cfg["generate"]["output_language"] not in OUTPUT_LANGUAGES:
         raise InputError(f"不支持的输出语言: {cfg['generate']['output_language']}")
 
+    # 自定义块类型校验结果要反馈（曾静默丢弃非法条目，用户填错 id 毫无感知）
+    from src.core.block_types import install_types
+
+    bad_types = install_types((cfg.get("generate", {}) or {}).get("block_types"))
     save_config(st.root, cfg)
     st.reload_config()
     return {"settings": {"parser": st.config.get("parser"),
                          "generate": st.config.get("generate"),
-                         "export": st.config.get("export")}}
+                         "export": st.config.get("export")},
+            "block_type_warnings": [f"无效的自定义类型 id（已忽略）: {b}" for b in bad_types]}
 
 
 @router.get("/api/v1/usage")

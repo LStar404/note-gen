@@ -122,7 +122,7 @@ export default function SettingsPanel() {
 
   const saveAppSettings = async () => {
     try {
-      await api.saveSettings({
+      const r: any = await api.saveSettings({
         parser: settings.parser,
         generate: {
           output_language: settings.generate?.output_language,
@@ -131,7 +131,9 @@ export default function SettingsPanel() {
         },
         export: settings.export,
       });
-      toast("设置已保存");
+      toast((r?.block_type_warnings ?? []).length
+        ? "设置已保存，但有无效类型：" + r.block_type_warnings.join("；")
+        : "设置已保存");
       await reload();
     } catch (e: any) {
       toast("保存失败：" + e.message);

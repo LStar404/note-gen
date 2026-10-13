@@ -163,8 +163,12 @@ def export_tex_chapter(store: DocStore, chapter_id: str, *, out_dir: Path,
                 body.append(B + cmd + "{" + md_inline_to_tex(title) + "}")
                 prev_heading = block.get("heading_anchor_id")
 
-        spec = get_type(block.get("type", "link"))
-        env = spec.tex_env
+        try:
+            spec = get_type(block.get("type", "link"))
+            env = spec.tex_env
+        except Exception:
+            # 自定义类型被删后旧块仍要能导出：降级为无编号段落，不炸整次导出
+            env = None
         title = tex_escape(block.get("title", ""))
         content = rewrite_citations(block.get("content", ""), refs_by_num, mode="tex")
         for fig_id, path in figure_paths.items():

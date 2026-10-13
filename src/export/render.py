@@ -46,7 +46,15 @@ def labels_for(lang: str = "zh", *, encoding: str = "utf-8") -> dict:
     """导出标签；非 UTF-8 编码时去图标（GBK/Big5 无法表示 emoji）。"""
     labels = dict(LANG_LABELS.get(lang, LANG_LABELS["zh"]))
     utf8 = (encoding or "utf-8").lower().startswith("utf-8")
-    labels["icons"] = TYPE_ICONS if utf8 else {}
+    icons = dict(TYPE_ICONS)
+    if utf8:
+        # 学科模板/自定义类型图标同源注册表：此前只有内置 8 类有图标，
+        # 物理的定律/自定义病例等导出时图标全部丢失
+        from src.core.block_types import REGISTRY, _CUSTOM
+
+        for spec in list(REGISTRY.values()) + list(_CUSTOM.values()):
+            icons.setdefault(spec.type_id, spec.icon)
+    labels["icons"] = icons if utf8 else {}
     return labels
 
 
