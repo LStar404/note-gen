@@ -31,6 +31,8 @@ interface Store {
   dirtyDraft: string | null;
   settingsOpen: boolean;
   setupOpen: boolean;
+  onboardOpen: boolean;
+  openOnboard: (open: boolean) => void;
   reviewOpen: boolean;
   reviewItems: NoteBlock[];
   reviewCount: number;
@@ -83,6 +85,7 @@ export const useStore = create<Store>((set, get) => ({
   dirtyDraft: null,
   settingsOpen: false,
   setupOpen: false,
+  onboardOpen: false,
   reviewOpen: false,
   reviewItems: [],
   reviewCount: 0,
@@ -156,6 +159,7 @@ export const useStore = create<Store>((set, get) => ({
   },
   openSettings: (open) => set({ settingsOpen: open }),
   openSetup: (open) => set({ setupOpen: open }),
+  openOnboard: (open) => set({ onboardOpen: open }),
   openReview: async (open) => {
     if (!open) {
       set({ reviewOpen: false });

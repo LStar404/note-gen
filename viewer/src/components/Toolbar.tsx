@@ -705,6 +705,8 @@ export default function Toolbar() {
           刷新图资源
         </button>
       )}
+      <button onClick={() => useStore.setState({ onboardOpen: true })}
+              title="使用引导：认识产品、界面导览、三分钟上手">使用引导</button>
       <button onClick={() => openSetup(true)} title="配置指南：环境自检与首次使用引导">配置指南</button>
       <button onClick={() => openSettings(true)}>设置</button>
 

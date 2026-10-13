@@ -5,6 +5,7 @@ import PdfPane from "./pdf/PdfPane";
 import NotesPane from "./components/NotesPane";
 import BlockDetailPanel from "./components/BlockDetailPanel";
 import BlockActionModals from "./components/BlockActionModals";
+import OnboardingWizard from "./components/OnboardingWizard";
 import NoteZoom from "./components/NoteZoom";
 import SettingsPanel from "./components/SettingsPanel";
 import SetupGuide from "./components/SetupGuide";
@@ -135,8 +136,14 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [blocks, selectedBlockId, view]);
 
-  // 配置指南（ADR D35）：首次使用且未就绪时自动弹出；手动关闭后不再打扰
+  // 新人引导：首次进入自动弹教学向导（认识产品/界面导览/上手/配置自检）；
+  // 看过与否记 localStorage，工具栏「使用引导」可随时重看。
   useEffect(() => {
+    if (!localStorage.getItem("note-gen-onboarded")) {
+      useStore.getState().openOnboard(true);
+      return;
+    }
+    // 老用户但未就绪：保留原行为自动弹配置指南；手动关闭后不再打扰
     api
       .setupStatus()
       .then((s: any) => {
@@ -179,6 +186,7 @@ export default function App() {
       <BlockActionModals />
       <SettingsPanel />
       <SetupGuide />
+      <OnboardingWizard />
       <ReviewQueue />
       {toast && <div className="toast">{toast}</div>}
     </div>
