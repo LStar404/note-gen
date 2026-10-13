@@ -36,6 +36,38 @@ def _math_to_anki(text: str) -> str:
     return MATH_RE.sub(repl, text)
 
 
+_MATH_SEG_RE = re.compile(r"\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]")
+
+
+def _md_to_card_html(text: str) -> str:
+    r"""卡片背面的轻量 Markdown → HTML：Anki 不渲染 md，字面 **加粗**/[链接](x) 会很难看。
+
+    数学段 \(..\)/\[..\] 先遮蔽再做 md 变换——里面的 * 是乘号不是斜体；
+    解遮时单独做 HTML 转义：数学里的 <（R<\infty）必须转义，否则被当标签吞掉。"""
+    masked: list[str] = []
+
+    def _keep(m: re.Match) -> str:
+        masked.append(m.group(0))
+        return chr(0) + str(len(masked) - 1) + chr(0)
+
+    work = _MATH_SEG_RE.sub(_keep, text)
+    work = html.escape(work)
+    work = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", work)
+    work = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", work)
+    work = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", work)
+    # 链接：http(s) 成超链接；note:// 等站内引用在 Anki 里点不开 → 留纯文本
+    work = re.sub(
+        r"\[([^\]\n]+)\]\(([^)\n]+)\)",
+        lambda m: (f'<a href="{m.group(2)}">{m.group(1)}</a>'
+                  if m.group(2).startswith(("http://", "https://")) else m.group(1)),
+        work)
+    work = re.sub(r"(?m)^(\s*)[-*]\s+", r"\1• ", work)
+    work = work.replace("\n", "<br/>")
+    for i, seg in enumerate(masked):
+        work = work.replace(chr(0) + str(i) + chr(0), html.escape(seg))
+    return work
+
+
 def _back_html(block: dict, anchors_by_id: dict[str, dict]) -> str:
     content = _math_to_anki(block.get("content", ""))
     pages = []
@@ -45,7 +77,7 @@ def _back_html(block: dict, anchors_by_id: dict[str, dict]) -> str:
             pages.append(page)
     # 必须 HTML 转义：数学里的 <（R<\infty）会被当标签吞掉，Anki 渲染残缺。
     # 实体在文本节点里被浏览器还原，MathJax 照常读到原始 <。
-    content_html = html.escape(content).replace("\n", "<br/>")
+    content_html = _md_to_card_html(content)
     footer = ("来源页码：" + "、".join(f"p.{p}" for p in pages)) if pages else "（AI 归纳，无来源页码）"
     return f"<div>{content_html}</div><hr/><div style='color:#666;font-size:12px'>{footer}</div>"
 

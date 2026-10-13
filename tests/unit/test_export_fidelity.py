@@ -33,6 +33,25 @@ def test_heading_inline_math_not_escaped():
     assert "textbackslash" not in tex
 
 
+def test_anki_back_renders_markdown_not_literal():
+    """Anki 不渲染 Markdown：卡背的 **加粗**/链接/列表曾以字面语法显示。"""
+    block = {"content": "**重点** 与 *斜体* 与 `代码`\n- 条目一\n[站内](note://anchor/a?page=3) 与 [外链](https://x.y)",
+             "sources": []}
+    out = _back_html(block, {})
+    assert "<b>重点</b>" in out and "<i>斜体</i>" in out and "<code>代码</code>" in out, out
+    assert "• 条目一" in out, out
+    assert '<a href="https://x.y">外链</a>' in out, out
+    assert "note://" not in out and "[站内]" not in out, "站内链接应降级纯文本"
+
+
+def test_anki_math_protected_from_markdown_and_lt_escaped():
+    """数学段里的 * 是乘号不是斜体；< 必须转义（HTML 吞标签老 bug 不得回归）。"""
+    block = {"content": "$a * b < c$ 与 " + chr(92) + "(**x**" + chr(92) + ")", "sources": []}
+    out = _back_html(block, {})
+    assert "<i>" not in out and "<b>" not in out, out
+    assert "&lt;" in out, out
+
+
 def test_anki_back_html_escapes_lt():
     block = {"content": "条件 \u005c(R<\u005cinfty\u005c) 成立\n第二行", "sources": []}
     h = _back_html(block, {})
