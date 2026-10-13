@@ -141,19 +141,40 @@ function createRenderer(): MarkdownIt {
 
 const renderer = createRenderer();
 
+/** 数学定界符典则化：\(…\) → $…$、\[…\] → $$…$$（与后端 normalize_math_text 同规则）。
+ *  校验闸门接受四种数学写法，但渲染器只认 $ 形式——存量数据里的 \(..\)/\[..\)
+ *  曾显示成裸文本（导出侧则被转义成垃圾）；预览截断的 $ 配对逻辑也依赖此典则化。 */
+function canonicalizeMathDelimiters(src: string): string {
+  // 区间 + 邻接守卫（与后端 normalize_math_text 同规则）：已有 $..$ 段内的
+  // \(..\) 不转换（存量脏嵌套 $\(\zeta\)_1$），转换出的 $ 不得与相邻 $ 粘成假 $$
+  const spans: Array<[number, number]> = [];
+  for (const m of src.matchAll(/(\$\$[\s\S]*?\$\$|\$[^$]*?\$)/g)) {
+    spans.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
+  }
+  return src.replace(
+    /(?<!\$)\\(\[|\()([\s\S]*?)\\(\]|\))(?!\$)/g,
+    (full, open: string, body: string, close: string, offset: number) => {
+      if (open !== close) return full;
+      if (spans.some(([a, b]) => !(offset + full.length <= a || offset >= b))) return full;
+      return open === "[" ? `$$${body}$$` : `$${body}$`;
+    },
+  );
+}
+
 export function renderMarkdown(content: string, docId: string, captions: Record<string, string> = {}): string {
-  return renderer.render(content || "", { docId, captions } as RenderEnv);
+  return renderer.render(canonicalizeMathDelimiters(content || ""), { docId, captions } as RenderEnv);
 }
 
 /** 行内渲染（标题等单行文本）：$…$ 走 KaTeX，无块级包装。 */
 export function renderInline(content: string, docId: string = ""): string {
-  return renderer.renderInline(content || "", { docId, captions: {} } as RenderEnv);
+  return renderer.renderInline(canonicalizeMathDelimiters(content || ""),
+    { docId, captions: {} } as RenderEnv);
 }
 
 /** 卡片预览截断：按行边界截，绝不切断公式——
  *  $…$ 成对保留；$$…$$ 块整体保留或整体丢弃（截断后计数为奇数就回退到开标记前）。 */
 export function previewSource(content: string, maxChars = 320): string {
-  const src = content || "";
+  const src = canonicalizeMathDelimiters(content || "");
   if (src.length <= maxChars) return src;
   let cut = src.lastIndexOf("\n", maxChars);
   if (cut < 40) cut = maxChars;

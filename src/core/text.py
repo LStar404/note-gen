@@ -168,6 +168,9 @@ _CONTROL_FIXED = {0x00: "\\", 0x08: "\\b", 0x0B: "\\v", 0x0C: "\\f"}
 _CONTROL_GUESS = {0x09: "t", 0x0D: "r"}
 # 零宽/不可见格式字符：公式里混进来就是隐形炸弹（\to\ufeff\to 这种），直接删掉
 _INVISIBLE = {0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF}
+# 其余 C0 控制字符与 DEL：笔记文本里永不合法（实测存量块里混过 \x01，
+# 渲染成豆腐块、导出出垃圾）。0x09/0x0a/0x0d 另有语义，不在其列。
+_CONTROL_DROP = set(range(0x01, 0x08)) | set(range(0x0E, 0x20)) | {0x7F}
 
 
 def sanitize_control_chars(text: str) -> str:
@@ -183,7 +186,7 @@ def sanitize_control_chars(text: str) -> str:
             out.append(_CONTROL_FIXED[code])
             i += 1
             continue
-        if code in _INVISIBLE:
+        if code in _INVISIBLE or code in _CONTROL_DROP:
             i += 1
             continue
         if code in _CONTROL_GUESS:
@@ -235,6 +238,14 @@ GREEK_COMMANDS = {
 }
 
 _MATH_SPAN_RE = re.compile(r"\$\$[\s\S]*?\$\$|\$[^$]*?\$")
+# \\(...\\) / \\[...\\] 定界的数学（与校验闸门 MATH_PATTERN 同一套写法）：
+# 先典则化成 $ 形式，下游（span 修复/前端/导出）只需认一种
+# 守卫：定界符不得与 $ 相邻才转换——存量内容有 $\(\zeta\)_1$ 这种脏嵌套，
+# 转换出的 $ 会与相邻 $ 粘成假 $$，拆散全篇公式配对（实测踩过）
+_CANON_INLINE_RE = re.compile(
+    r"(?<!\$)" + chr(92) * 2 + r"\(([\s\S]*?)" + chr(92) * 2 + r"\)(?!\$)")
+_CANON_DISPLAY_RE = re.compile(
+    r"(?<!\$)" + chr(92) * 2 + r"\[([\s\S]*?)" + chr(92) * 2 + r"\](?!\$)")
 _TEXT_GROUP_RE = re.compile(r"\\text\{[^}]*\}")
 # 异体字/私用区/替换字符/希伯来-阿拉伯呈现形式：数学里出现必然是模型垃圾输出
 _JUNK_CHARS_RE = re.compile(r"[\uE000-\uF8FF\uFB1D-\uFB4F\uFBF0-\uFDFF\uFFFD]")
@@ -352,6 +363,9 @@ def repair_stray_latex(content: str) -> str:
 def normalize_math_text(content: str) -> str:
     """公式文本规范化（入库闸门 + 存量修复）。
 
+    0) 数学定界符典则化：\\(...\\) → $...$、\\[...\\] → $$...$$。校验闸门接受
+       四种数学写法，但前端渲染与导出只认 $ 形式——\\(..\\)/\\[..\\] 曾在 UI
+       显示裸文本、在 TeX 导出被转义成 \textbackslash 垃圾（实测 72 处真实数据）
     1) 行内公式跨行会让前端不跨行匹配 → $ 配对错位、散文被当公式渲染；
        若换行处紧跟已知命令名，说明模型把反斜杠写丢成了换行（"$<NL>lim_{...}"），
        还原为反斜杠；其余行内换行并成空格
@@ -359,7 +373,7 @@ def normalize_math_text(content: str) -> str:
     3) 清除数学里的异体字/私用区垃圾字符
     文本段的越界命令由 repair_stray_latex 处理（生成侧闸门链上先跑）。
     """
-    if not content or "$" not in content:
+    if not content or ("$" not in content and _B not in content):
         return content
     fences: list[str] = []               # 代码块里的 $ 不是公式
 
@@ -368,6 +382,20 @@ def normalize_math_text(content: str) -> str:
         return chr(1) + str(len(fences) - 1) + chr(1)
 
     text = _FENCE_RE.sub(_keep_fence, content)
+    # 典则化在代码块遮蔽之后：代码里的 \(..\) 是字面文本，不得改写。
+    # 只转换「落在已有 $..$ 段之外」的定界符：存量有 $\(\zeta\)_1$ 这种脏嵌套，
+    # 段内的 \(..\) 已在数学里，改写会拆散 $ 配对（实测踩过）。用区间判断而非
+    # 遮蔽替换——遮蔽会把相邻的 $ 藏进掩码标记，骗过「不与 $ 相邻」的正则守卫。
+    # _CANON_* 自带邻接守卫：转换出的 $ 与相邻 $ 粘成假 $$ 同样毁配对。
+    math_spans = [(m.start(), m.end()) for m in _MATH_SPAN_RE.finditer(text)]
+
+    def _canon_sub(m: "re.Match[str]", wrap) -> str:
+        if any(not (m.end() <= a or m.start() >= b) for a, b in math_spans):
+            return m.group(0)
+        return wrap(m.group(1))
+
+    text = _CANON_DISPLAY_RE.sub(lambda m: _canon_sub(m, lambda body: "$$" + body + "$$"), text)
+    text = _CANON_INLINE_RE.sub(lambda m: _canon_sub(m, lambda body: "$" + body + "$"), text)
     text = _MATH_SPAN_RE.sub(lambda m: _normalize_math_span(m.group(0)), text)
     for i, fence in enumerate(fences):
         text = text.replace(chr(1) + str(i) + chr(1), fence)

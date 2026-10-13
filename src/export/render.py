@@ -64,7 +64,19 @@ def block_order_key(block: dict) -> tuple:
 
 
 def live_blocks(blocks: Iterable[dict]) -> list[dict]:
-    return sorted([b for b in blocks if not b.get("deleted_at")], key=block_order_key)
+    """过滤软删 + I9 排序；顺带内容净化（存量修复）：旧块里的 \\(..\\)/\\[..\\) 数学
+    定界与控制字符会让导出被转义成垃圾（实测 72 处公式被毁、块里混过 \x01）。"""
+    from src.core.text import normalize_math_text, sanitize_control_chars
+
+    out: list[dict] = []
+    for b in sorted([x for x in blocks if not x.get("deleted_at")], key=block_order_key):
+        b = dict(b)
+        if isinstance(b.get("content"), str):
+            b["content"] = normalize_math_text(sanitize_control_chars(b["content"]))
+        if isinstance(b.get("title"), str):
+            b["title"] = sanitize_control_chars(b["title"])
+        out.append(b)
+    return out
 
 
 def source_badges(block: dict, anchors_by_id: dict[str, dict], *, mode: str = "md",
