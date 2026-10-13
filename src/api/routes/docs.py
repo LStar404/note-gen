@@ -51,8 +51,9 @@ async def create_doc(request: Request, file: UploadFile = File(...), title: str 
                      profile: str = Form("textbook"), doc_id: str | None = Form(None),
                      overwrite: bool = Form(False)):
     st = state(request)
-    if not file.filename.lower().endswith(".pdf"):
-        raise InputError("只支持 PDF 文件")
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in (".pdf", ".pptx"):
+        raise InputError("只支持 PDF 与 PPTX 讲义")
     if not (file.filename or "").strip():
         raise InputError("文件名为空")
     data = await file.read()
@@ -74,17 +75,27 @@ async def create_doc(request: Request, file: UploadFile = File(...), title: str 
 
         shutil.rmtree(st.layout.doc_dir(doc), ignore_errors=True)
     st.layout.textbooks_dir.mkdir(parents=True, exist_ok=True)
-    target = st.layout.textbooks_dir / f"{doc}.pdf"
+    target = st.layout.textbooks_dir / f"{doc}{suffix}"
     target.write_bytes(data)
 
     def run(req, progress, is_cancelled, register_artifact, task_id=None):
         progress({"stage": "ingest", "pages_done": 0, "pages_total": None})
-        manifest = parse_pdf_with_fallback(target, st.layout.ingest_root,
-                                           st.config.get("parser", {}).get("default", "auto"),
-                                           layout=st.layout, doc_id=doc, profile=profile,
-                                           title=title or Path(file.filename).stem,
-                                           config=st.config, progress=progress,
-                                           vision_ocr=_vision_ocr_for(st))
+        if suffix == ".pptx":
+            # PPTX 讲义：python-pptx 直接抽幻灯片（文本/几何/插图），合成与 PDF
+            # 同形的 pages JSON——锚点/生成/检索管线原样复用
+            from src.ingest.parse_pptx import parse_pptx
+
+            manifest = parse_pptx(target, st.layout.ingest_root, layout=st.layout, doc_id=doc,
+                                  profile=profile, title=title or Path(file.filename).stem,
+                                  chapters_override=(st.config.get("chapters_override") or None),
+                                  progress=progress)
+        else:
+            manifest = parse_pdf_with_fallback(target, st.layout.ingest_root,
+                                               st.config.get("parser", {}).get("default", "auto"),
+                                               layout=st.layout, doc_id=doc, profile=profile,
+                                               title=title or Path(file.filename).stem,
+                                               config=st.config, progress=progress,
+                                               vision_ocr=_vision_ocr_for(st))
         from src.anchor.chunker import chunk_and_anchor
 
         counts = {}
@@ -275,6 +286,66 @@ def rename_doc(request: Request, doc_id: str, body: dict):
     store.commit(DocMutation(manifest_updates={"title": title}),
                  base_revision=base, sync_backlinks=False)
     return {"doc_id": doc_id, "title": title}
+
+
+@router.post("/api/v1/docs/{doc_id}/append")
+async def append_pdf(request: Request, doc_id: str, file: UploadFile = File(...)):
+    """追加讲义：把新 PDF 接到现有教材尾部（老师逐份发放的讲义场景）。
+
+    合并 PDF 后全书重解析 + 全章重锚定：锚点身份 = 内容哈希——已有笔记、生成缓存、
+    报告全部原样保留，新页只带来新章节（生成过的章照旧跳过/复用）。"""
+    st = state(request)
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise InputError("追加只支持 PDF（PPTX 讲义请合并后重新导入）")
+    data = await file.read()
+    if not data:
+        raise InputError("文件为空")
+    if len(data) > 200 * 1024 * 1024:
+        raise InputError("PDF 超过 200 MiB 限制")
+    if not st.layout.manifest(doc_id).exists():
+        raise NotFound(f"文档不存在: {doc_id}")
+    existing = st.layout.textbooks_dir / f"{doc_id}.pdf"
+    if not existing.exists():
+        raise InputError("该教材没有可追加的 PDF（PPTX 教材暂不支持追加）")
+    man = DocStore(st.layout, doc_id).manifest()
+
+    def run(req, progress, is_cancelled, register_artifact, task_id=None):
+        from io import BytesIO
+
+        from pypdf import PdfReader, PdfWriter
+
+        from src.anchor.chunker import chunk_and_anchor
+
+        progress({"stage": "ingest", "pages_done": 0, "pages_total": None})
+        # 1) 合并：老 PDF + 新 PDF → 原地替换（pdf_path 不变，内存句柄避开 Windows 占用）
+        writer = PdfWriter()
+        writer.append(PdfReader(BytesIO(existing.read_bytes())))
+        writer.append(PdfReader(BytesIO(data)))
+        buf = BytesIO()
+        writer.write(buf)
+        existing.write_bytes(buf.getvalue())
+        # 2) 全书重解析（页内容确定性不变：锚点/缓存/报告身份全部保留）
+        manifest_new = parse_pdf_with_fallback(
+            existing, st.layout.ingest_root, st.config.get("parser", {}).get("default", "auto"),
+            layout=st.layout, doc_id=doc_id, profile=man.get("profile", "textbook"),
+            title=man.get("title"), config=st.config, progress=progress,
+            vision_ocr=_vision_ocr_for(st))
+        # 3) 全章重锚定（新增页带来新章节，旧章锚点身份不变）
+        chapters = manifest_new["chapters"]
+        counts = {}
+        for idx, ch in enumerate(chapters):
+            if is_cancelled():
+                raise TaskCancelled("任务已取消")
+            progress({"stage": "anchor", "done": idx, "total": len(chapters),
+                      "chapter_id": ch["chapter_id"]})
+            counts[ch["chapter_id"]] = chunk_and_anchor(doc_id, ch["chapter_id"], layout=st.layout)
+        progress({"stage": "anchor", "done": len(chapters), "total": len(chapters)})
+        return {"doc_id": doc_id, "chapters": chapters, "anchors": counts, "appended": True}
+
+    task = st.tasks.submit("import", run, {"doc_id": doc_id, "mode": "append",
+                                           "filename": file.filename},
+                           doc_id=doc_id, name=(man.get("title") or doc_id) + " · 追加讲义")
+    return JSONResponse({"task_id": task["task_id"], "doc_id": doc_id}, status_code=202)
 
 
 @router.delete("/api/v1/docs/{doc_id}")

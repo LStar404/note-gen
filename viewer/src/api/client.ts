@@ -56,6 +56,12 @@ export const api = {
     api.del<any>("/api/v1/docs/" + docId, { confirmed: true }),
   renameDoc: (docId: string, title: string) =>
     api.post<{ doc_id: string; title: string }>("/api/v1/docs/" + docId + "/rename", { title }),
+  appendPdf: (docId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.post<{ task_id: string; doc_id: string }>(
+      "/api/v1/docs/" + docId + "/append", form);
+  },
   rebuildDoc: (docId: string) => api.post<{ task_id: string; doc_id: string }>(
     "/api/v1/docs/" + docId + "/rebuild", {}),
   refreshFigures: (docId: string) => api.post<{ figures: number; patched_blocks: number }>(

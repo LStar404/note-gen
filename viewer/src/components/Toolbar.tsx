@@ -117,8 +117,10 @@ export default function Toolbar() {
       const file = e.dataTransfer?.files?.[0];
       if (!file) return;
       const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
-      if (!isPdf) {
-        setToast("只支持 PDF 文件：" + file.name);
+      const isPptx = /\.pptx$/i.test(file.name)
+        || file.type === "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+      if (!isPdf && !isPptx) {
+        setToast("只支持 PDF 与 PPTX 讲义：" + file.name);
         return;
       }
       void importPdf(file);
@@ -382,6 +384,21 @@ export default function Toolbar() {
     }
   };
 
+  const appendLecture = async (file: File | null) => {
+    if (!file || !docId) return;
+    if (!/\.pdf$/i.test(file.name)) {
+      setToast("追加只支持 PDF 讲义（PPTX 请合并后重新导入）");
+      return;
+    }
+    try {
+      const { task_id } = await api.appendPdf(docId, file);
+      track(task_id, "import");
+      setToast("追加任务已启动：新讲义将接到本书尾部");
+    } catch (e: any) {
+      setToast("追加失败：" + e.message);
+    }
+  };
+
   const importPdf = async (file: File | null) => {
     if (!file) return;
     const form = new FormData();
@@ -509,10 +526,19 @@ export default function Toolbar() {
         ))}
       </select>
 
-      <label className="file-button primary">
-        导入 PDF
-        <input type="file" accept="application/pdf" hidden onChange={(e) => void importPdf(e.target.files?.[0] ?? null)} />
+      <label className="file-button primary" title="导入 PDF（数字版/扫描版）或 PPTX 讲义">
+        导入讲义
+        <input type="file" accept="application/pdf,.pptx" hidden
+               onChange={(e) => void importPdf(e.target.files?.[0] ?? null)} />
       </label>
+      {docId && (
+        <label className="file-button"
+               title="把新的讲义 PDF 追加到本教材尾部：已有笔记、生成记录全部保留，新页带来新章节">
+          追加讲义
+          <input type="file" accept="application/pdf" hidden
+                 onChange={(e) => void appendLecture(e.target.files?.[0] ?? null)} />
+        </label>
+      )}
 
       {docId && (
         <button
@@ -745,7 +771,7 @@ export default function Toolbar() {
           <div className="drop-card">
             <div className="drop-icon">📄</div>
             <b>松开导入 PDF</b>
-            <span className="muted">支持任意大小的数字版/扫描版教材，导入后自动解析、分章、锚定</span>
+            <span className="muted">支持 PDF（数字版/扫描版）与 PPTX 讲义，导入后自动解析、分章、锚定</span>
           </div>
         </div>
       )}
