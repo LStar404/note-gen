@@ -356,20 +356,15 @@ export default function Toolbar() {
     }
   };
 
-  const doGenerateBook = async () => {
+  const doGenerateBook = async (skipDone: boolean) => {
     if (!docId) return;
-    const chapters = manifest?.chapters ?? [];
-    const ok = window.confirm(
-      "一键生成全书？\n\n" +
-      "· 共 " + chapters.length + " 章，全部生成笔记\n" +
-      "· 已有笔记不会丢：按合并策略原地更新（人工修改/受保护块照旧保留）\n" +
-      "· 消耗较大：时间与 token 都是全书量级；任务可随时暂停/续跑\n\n" +
-      "确定开始？"
-    );
-    if (!ok) return;
     try {
       const custom = genName.trim();
-      const { task_id } = await api.generate(docId, { name: custom || undefined });
+      const { task_id } = await api.generate(docId, {
+        name: custom || undefined,
+        skip_done: skipDone,
+      });
+      setBookOpen(false);
       const st = useStore.getState();
       const docTitle = st.docs.find((d) => d.doc_id === docId)?.title ?? docId;
       track(task_id, "generate", { doc_id: docId, chapter_id: null },
@@ -408,6 +403,9 @@ export default function Toolbar() {
   const [exportOpen, setExportOpen] = useState(false);
   const [expFormat, setExpFormat] = useState("md");
   const [expScope, setExpScope] = useState<"book" | "chapter">("book");
+  // 全书生成选项弹窗：跳过已生成章节（默认）/ 全量重生成
+  const [bookOpen, setBookOpen] = useState(false);
+  const [regenAll, setRegenAll] = useState(false);
   // 教材改名
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameText, setRenameText] = useState("");
@@ -578,8 +576,8 @@ export default function Toolbar() {
       />
       <button onClick={doGenerate}>生成本章</button>
       <button
-        onClick={() => void doGenerateBook()}
-        title="一键生成全书：全部章节生成笔记（已有笔记不丢，按合并策略更新）；可暂停/续跑"
+        onClick={() => setBookOpen(true)}
+        title="一键生成全书：可跳过已生成章节；已有笔记不丢；可暂停/续跑"
       >
         全书生成
       </button>
@@ -659,6 +657,14 @@ export default function Toolbar() {
                 {!["succeeded", "partial", "failed"].includes(t.status) && t.progress?.stage
                   ? " · " + progressText(t.progress)
                   : ""}
+                {/* 部分完成要说清：跑完了、其余块已保存、N 块需处理（在待审核）——
+                    否则「部分完成」看着像没干完谎报 */}
+                {t.status === "partial" &&
+                  (() => {
+                    const n = (t.result?.reports ?? []).reduce(
+                      (acc: number, r: any) => acc + (r.failures ?? []).length, 0);
+                    return n > 0 ? " · 其余块已保存，" + n + " 块需处理（见待审核）" : "";
+                  })()}
                 {t.status === "failed" && t.error?.message ? " · " + t.error.message : ""}
               </span>
               {["queued", "running"].includes(t.status) &&
@@ -800,6 +806,41 @@ export default function Toolbar() {
               );
             })}
             <button onClick={() => setRecords(null)}>关闭</button>
+          </div>
+        </div>
+      )}
+      {bookOpen && (
+        <div className="modal-mask" onClick={() => setBookOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>全书生成</h2>
+            <div className="muted">
+              共 {(manifest?.chapters ?? []).length} 章。已有笔记不会丢：按合并策略原地更新
+              （人工修改/受保护块照旧保留）；任务可随时暂停/续跑。
+            </div>
+            <div className="export-grid">
+              <label>
+                <input type="radio" name="book-mode" checked={!regenAll}
+                       onChange={() => setRegenAll(false)} />
+                <span>
+                  <b>跳过已生成的章节（推荐）</b>
+                  <em>已生成且锚点未变的章节直接跳过，不重烧 token；只补没生成的章节</em>
+                </span>
+              </label>
+              <label>
+                <input type="radio" name="book-mode" checked={regenAll}
+                       onChange={() => setRegenAll(true)} />
+                <span>
+                  <b>全部重新生成</b>
+                  <em>换提示词/模型后想要全书焕新时用；消耗与时间都是全书量级</em>
+                </span>
+              </label>
+            </div>
+            <div className="export-actions">
+              <button onClick={() => setBookOpen(false)}>取消</button>
+              <button className="primary" onClick={() => void doGenerateBook(!regenAll)}>
+                开始生成
+              </button>
+            </div>
           </div>
         </div>
       )}

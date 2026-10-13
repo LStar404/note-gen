@@ -160,6 +160,9 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
         "cache_hit": False, "outline_complete": True, "created_at": utc_now_iso(),
         "model": {"outline": outline_model, "fill": fill_model},
         "failures": [],
+        # 记录本次生成对应的锚点指纹：全书生成据此判断「已生成完且锚点没变」才跳过，
+        # 重锚定/换提示词后的章节不会被旧报告误跳
+        "outline_hash": outline_hash,
     }
     t_start = time.monotonic()
 

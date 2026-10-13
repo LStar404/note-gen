@@ -422,13 +422,18 @@ def search(request: Request, doc_id: str, q: str, mode: str = "fts"):
     }
 
 
-def _build_generate_run(st, doc_id: str, chapter_id, model, resume: bool = False):
+def _build_generate_run(st, doc_id: str, chapter_id, model, resume: bool = False,
+                        skip_done: bool = False):
     """生成任务执行体（触发与续跑共用）。
 
     resume=True：吃掉该章已有缓存的完成块、只补缺口（换模型/升级提示词
     不让已完成的 115/117 重烧），并复用原任务记录（同 task_id）。
+    skip_done=True（全书生成默认）：已有 complete 报告且锚点指纹未变的章节跳过，
+    不重烧 LLM；换提示词/模型想全量重生成时置 False。
     """
     def run(req, progress, is_cancelled, register_artifact, task_id=None):
+        import json as _json
+
         from src.generate.engine import generate_chapter
 
         store = DocStore(st.layout, doc_id)
@@ -476,6 +481,23 @@ def _build_generate_run(st, doc_id: str, chapter_id, model, resume: bool = False
             """执行一章；可隔离的失败转成失败报告，不可隔离的继续上抛。"""
             if is_cancelled():
                 raise TaskCancelled("任务已取消")
+            if skip_done:
+                # 已生成完才跳：complete 报告 + 锚点指纹未变（报告即事实源）；
+                # 重锚定/换提示词想重生成 → skip_done=False 全量重跑
+                prev = None
+                rep_path = st.layout.reports_doc_dir(doc_id) / f"{ch}.generate.json"
+                try:
+                    if rep_path.exists():
+                        prev = _json.loads(rep_path.read_text(encoding="utf-8"))
+                except Exception:
+                    prev = None
+                ch_meta = next((c for c in store.manifest().get("chapters", [])
+                                if c.get("chapter_id") == ch), {})
+                if (prev and prev.get("status") == "complete"
+                        and prev.get("outline_hash") == (ch_meta.get("outline_hash") or "")):
+                    progress({"stage": "generate", "chapter_id": ch, "skipped": True})
+                    return {"doc_id": doc_id, "chapter_id": ch, "status": "skipped",
+                            "reason": "已有完整生成记录且锚点未变化，跳过"}
             progress({"stage": "generate", "chapter_id": ch})
             try:
                 return generate_chapter(doc_id, ch, layout=st.layout, client=st.client,
@@ -522,7 +544,8 @@ def _build_generate_run(st, doc_id: str, chapter_id, model, resume: bool = False
         # 章内块级失败（report status=partial）必须反映到任务结局：
         # 原实现无条件返回 succeeded，22/61 块失败时任务盘照样亮绿灯
         return {"reports": reports,
-                "partial": any(r.get("status") != "complete" for r in reports)}
+                # skipped = 已生成完被跳过，不算 partial（否则全书生成永远亮黄灯）
+                "partial": any(r.get("status") not in ("complete", "skipped") for r in reports)}
 
     return run
 
@@ -534,6 +557,9 @@ def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
     body = body or {}
     chapter_id = body.get("chapter_id")
     model = body.get("model")
+    # 全书生成默认跳过已生成完的章节（complete 报告 + 锚点未变）；单章点击是显式意图不跳。
+    # 想全量重生成（如换提示词/模型）：body.skip_done=false
+    skip_done = bool(body.get("skip_done")) if "skip_done" in body else (chapter_id is None)
 
     # 防重复触发：同文档已有排队/运行中的生成任务时直接复用（避免重复烧钱）。
     # 收紧为文档级而非章节级：两个生成任务并跑 = 两个写者抢 data_revision（I7 单写者），
@@ -553,7 +579,7 @@ def trigger_generate(request: Request, doc_id: str, body: dict | None = None):
     except Exception:
         task_name = doc_id + (" · " + chapter_id if chapter_id else "")
     task_name = custom_name or task_name
-    run = _build_generate_run(st, doc_id, chapter_id, model)
+    run = _build_generate_run(st, doc_id, chapter_id, model, skip_done=skip_done)
     task = st.tasks.submit("generate", run, {"doc_id": doc_id, "chapter_id": chapter_id},
                            doc_id=doc_id, idempotency_key=None, name=task_name)
     return JSONResponse({"task_id": task["task_id"]}, status_code=202)
