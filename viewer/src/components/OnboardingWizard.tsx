@@ -41,6 +41,12 @@ export default function OnboardingWizard() {
     if (!open) return;
     setStep(0);
     if (!status) void api.setupStatus().then(setStatus).catch(() => undefined);
+    // Esc 关闭与其他弹窗一致（此前关不掉，只能点按钮）
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") done();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -51,12 +57,17 @@ export default function OnboardingWizard() {
     setOpen(false);
   };
 
-  const checks: [string, boolean | undefined, string][] = [
-    ["模型已配置", status?.checks?.models, "生成笔记、AI 出题、AI 编辑都靠它"],
-    ["API Key 可用", status?.checks?.keys, "密钥只存本机；推荐用环境变量名"],
-    ["任务路由就绪", status?.checks?.routes, "提纲/填充/出题各用哪个模型"],
-    ["解析器可用", status?.checks?.parser_pypdf || status?.checks?.parser_marker,
-      "PDF/PPTX 导入与分章锚定"],
+  // checks 是列表（_make_check(id, level, ...)，level=ok/warn/bad）——
+  // 曾按对象取键导致自检行永远显示「…」
+  const checkLevel = (id: string) =>
+    (status?.checks ?? []).find((x: any) => x?.id === id)?.level as string | undefined;
+  const parserLevel = checkLevel("parser_pypdf") || checkLevel("parser_marker")
+    || checkLevel("parser_docling");
+  const checks: [string, string | undefined, string][] = [
+    ["模型已配置", checkLevel("models"), "生成笔记、AI 出题、AI 编辑都靠它"],
+    ["API Key 可用", checkLevel("keys"), "密钥只存本机；推荐用环境变量名"],
+    ["任务路由就绪", checkLevel("routes"), "提纲/填充/出题各用哪个模型"],
+    ["解析器可用", parserLevel, "PDF/PPTX 导入与分章锚定"],
   ];
 
   return (
@@ -111,9 +122,11 @@ export default function OnboardingWizard() {
             <div className="muted" style={{ marginBottom: 8 }}>
               上手前看一眼配置自检（不达标也能先逛，随时回来配）：
             </div>
-            {checks.map(([label, ok, hint]) => (
+            {checks.map(([label, level, hint]) => (
               <div key={label} style={{ display: "flex", gap: 10, margin: "8px 0", alignItems: "baseline" }}>
-                <span style={{ minWidth: 24 }}>{status ? (ok ? "✅" : "⚠️") : "…"}</span>
+                <span style={{ minWidth: 24 }}>
+                  {!status ? "…" : level === "ok" ? "✅" : level === "warn" ? "⚠️" : "❌"}
+                </span>
                 <b style={{ minWidth: 110 }}>{label}</b>
                 <span className="muted" style={{ flex: 1 }}>{hint}</span>
               </div>
