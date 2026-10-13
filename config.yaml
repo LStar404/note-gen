@@ -8,6 +8,9 @@ parser:
   # 扫描书才用 marker/docling；显式指定 marker 会强制重型解析（百页数十分钟起）
   default: auto
   ocr_mode: auto
+  # 视觉补 OCR：本地 OCR 认不好的扫描页（公式/复杂排版乱码）交给视觉模型重识别，
+  # 每页少量 token；auto=有视觉能力模型就启用，off=关闭
+  ocr_vision: auto
   python: null
 chapters_override: []
 generate:

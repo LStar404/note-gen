@@ -83,7 +83,8 @@ async def create_doc(request: Request, file: UploadFile = File(...), title: str 
                                            st.config.get("parser", {}).get("default", "auto"),
                                            layout=st.layout, doc_id=doc, profile=profile,
                                            title=title or Path(file.filename).stem,
-                                           config=st.config, progress=progress)
+                                           config=st.config, progress=progress,
+                                           vision_ocr=_vision_ocr_for(st))
         from src.anchor.chunker import chunk_and_anchor
 
         counts = {}
@@ -133,7 +134,7 @@ def rebuild_doc(request: Request, doc_id: str, body: dict | None = None):
         manifest_new = parse_pdf_with_fallback(
             pdf, st.layout.ingest_root, st.config.get("parser", {}).get("default", "auto"),
             layout=st.layout, doc_id=doc_id, profile=profile, title=title,
-            config=st.config, progress=progress)
+            config=st.config, progress=progress, vision_ocr=_vision_ocr_for(st))
         chapters = manifest_new["chapters"]
         counts = {}
         for idx, ch in enumerate(chapters):
@@ -420,6 +421,31 @@ def search(request: Request, doc_id: str, q: str, mode: str = "fts"):
                     "summary": (b.get("content") or "")[:120], "status": b["status"]} for b in blocks],
         "mode": mode,
     }
+
+
+def _vision_ocr_for(st):
+    """视觉补 OCR 识别器（弱识别页重识别，每页少量 token）。
+
+    需要 vision 能力模型（generate.models.ocr 显式指定，或 fill/default 里有视觉能力的）；
+    parser.ocr_vision=off 关闭。构造失败不阻塞导入（本地 OCR 照常）。"""
+    try:
+        if (st.config.get("parser", {}) or {}).get("ocr_vision", "auto") == "off":
+            return None
+        models = (st.config.get("generate", {}).get("models", {}) or {})
+        cand = models.get("ocr")
+        if not cand:
+            for slot in ("fill", "default"):
+                name = models.get(slot)
+                if name and (st.registry.capabilities(name) or {}).get("vision"):
+                    cand = name
+                    break
+        if not cand or not (st.registry.capabilities(cand) or {}).get("vision"):
+            return None
+        from src.ingest.vision_ocr import build_vision_ocr
+
+        return build_vision_ocr(st.client, cand)
+    except Exception:
+        return None
 
 
 def _build_generate_run(st, doc_id: str, chapter_id, model, resume: bool = False,

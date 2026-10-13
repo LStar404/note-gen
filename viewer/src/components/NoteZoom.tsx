@@ -67,6 +67,24 @@ export default function NoteZoom() {
           <span className={`badge status-${block.status}`}>{STATUS_CN[block.status] ?? block.status}</span>
           {block.generation_protected && <span className="badge protected">已保护</span>}
           {block.basis === "synthesis" && <span className="badge synthesis">AI 归纳</span>}
+          <button
+            className="note-zoom-edit"
+            title="编辑此卡（切到源码视图）"
+            onClick={() => {
+              // 与视图切换同款草稿守卫：不静默丢弃未保存草稿
+              const st = useStore.getState();
+              if (st.view === "source" && st.dirtyDraft !== null) {
+                const ok = window.confirm("当前块有未保存草稿，编辑其他块将丢弃草稿，继续吗？");
+                if (!ok) return;
+                st.setDraft(null);
+              }
+              st.selectBlock(block.id);
+              st.setView("source");
+              closeZoom();
+            }}
+          >
+            ✎ 编辑
+          </button>
           <button className="note-zoom-close" onClick={closeZoom} title="关闭（Esc）">✕</button>
         </div>
         {/* 放大视图渲染全文：不得复用卡片预览（previewHtml 截断 320 字，曾吞掉乘法公理） */}

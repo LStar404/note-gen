@@ -13,7 +13,8 @@ DEFAULTS: dict[str, Any] = {
         "port": 8787,
         "cors_origins": ["http://127.0.0.1:5173"],
     },
-    "parser": {"default": "marker", "ocr_mode": "auto", "python": None},
+    "parser": {"default": "marker", "ocr_mode": "auto", "python": None,
+               "ocr_vision": "auto"},  # 视觉补 OCR：弱识别页交视觉模型重识别（off 关闭）
     "chapters_override": [],
     "generate": {
         "models": {
@@ -22,6 +23,7 @@ DEFAULTS: dict[str, Any] = {
             "fill": None,
             "agent": None,
             "link": None,
+            "ocr": None,   # 视觉补 OCR 用（需 vision 能力）；空则自动选 fill/default 里有视觉能力的
         },
         "outline_max_in": 32000,
         "fill_max_in": 8000,

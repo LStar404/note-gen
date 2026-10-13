@@ -345,12 +345,15 @@ def _decode_worker_stdout(mode: str, stdout: bytes, stderr: bytes | None = None)
 
 
 def ocr_pages_via_worker(pdf_path: str | Path, pages: list[int], pages_meta: list[dict],
-                         *, python: str | None = None, dpi: int = 150) -> dict | None:
-    """纯图片页 OCR（尽力而为）：失败返回 None 并由调用方记警告。"""
+                         *, python: str | None = None, dpi: int = 150,
+                         render_dir: str | None = None) -> dict | None:
+    """纯图片页 OCR（尽力而为）：失败返回 None 并由调用方记警告。
+
+    render_dir：worker 顺手存每页 PNG（视觉补 OCR 的输入）。"""
     try:
         return run_worker("ocr_pages", {"pdf_path": str(Path(pdf_path).resolve()),
                                         "pages": pages, "pages_meta": pages_meta,
-                                        "dpi": dpi}, python=python)
+                                        "dpi": dpi, "render_dir": render_dir}, python=python)
     except Exception:
         return None
 
@@ -536,7 +539,8 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
               profile: str = "textbook", title: str | None = None,
               chapters_override: list | None = None, ocr: bool = False,
               config: dict | None = None,
-              progress: Callable[[dict], None] | None = None) -> dict:
+              progress: Callable[[dict], None] | None = None,
+              vision_ocr: Callable[[str], list[dict]] | None = None) -> dict:
     """解析 PDF → pages/*.json + manifest（5.1 MUST 顺序执行）。返回 manifest dict。"""
     pdf_path = Path(pdf_path).resolve()
     if not pdf_path.exists():
@@ -637,6 +641,7 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
     pending: list[dict] = []
     failed = 0
     coord_skipped: list[str] = []
+    render_dir: Path | None = None
     figure_seq = 0
     ocr_pages_used = 0
 
@@ -729,20 +734,46 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
             # 就会像卡死在最后一页——单独报阶段状态
             progress({"stage": "ingest", "phase": "ocr", "pages_done": 0,
                       "pages_total": len(targets), "parser": adapter.name})
+        render_dir = out_dir / doc_id / "_ocr_png"
         ocr_out = ocr_pages_via_worker(
             pdf_path, targets,
             [_pdf_page_meta(reader.pages[i]) for i in range(n_pages)],
-            python=parser_python)
+            python=parser_python, render_dir=str(render_dir))
         ocr_by_page = {}
         for pg in ((ocr_out or {}).get("pages") or []):
             ocr_by_page[pg.get("page")] = pg.get("blocks", [])
+        vision_used = 0
         for p in pending:
             if not p["needs_ocr"]:
                 continue
             ocr_blocks = ocr_by_page.get(p["index"] + 1) or []
+            vb = p["meta"]["view_box"]
+            # 视觉补 OCR（5.1.1 增强）：本地 rapidocr 认不好的页交给视觉模型重识别
+            # （扫描书公式/复杂排版常见乱码；每页只花少量 token），失败保留本地结果
+            if vision_ocr is not None:
+                from src.ingest.vision_ocr import fracs_to_bbox, weak_ocr_text
+                if weak_ocr_text(" ".join((b.get("text") or "") for b in ocr_blocks)):
+                    png = render_dir / f"page_{p['index'] + 1:04d}.png"
+                    if png.exists():
+                        try:
+                            fixed = []
+                            for b in vision_ocr(str(png)):
+                                frac = b.get("frac") or [0.05, 0.0, 0.95, 0.01]
+                                fixed.append({"type": b.get("type", "paragraph"), "level": 0,
+                                              "text": b.get("text", ""),
+                                              "bbox": fracs_to_bbox(frac, vb)})
+                            if fixed:
+                                ocr_blocks = fixed
+                                vision_used += 1
+                                if progress:
+                                    progress({"stage": "ingest", "phase": "ocr",
+                                              "pages_done": vision_used,
+                                              "pages_total": len(targets),
+                                              "parser": "vision-ocr"})
+                        except Exception as exc:
+                            print(f"[ingest] 视觉补 OCR 失败（保留本地结果）：{exc}", file=sys.stderr)
             if not ocr_blocks:
                 continue
-            vb = p["meta"]["view_box"]
             for blk in ocr_blocks:
                 try:
                     bbox = validate_bbox(blk.get("bbox", vb), vb)
@@ -758,6 +789,11 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
                 p["page_json"]["parse_status"] = "ok"
                 p["status"] = "ok"
                 ocr_pages_used += 1
+
+        if vision_used:
+            print(f"[ingest] 视觉补 OCR 重识别 {vision_used} 页", file=sys.stderr)
+    if render_dir is not None:
+        shutil.rmtree(render_dir, ignore_errors=True)   # 渲染 PNG 只是视觉补 OCR 的中间产物
 
     for p in pending:
         page_json = p["page_json"]

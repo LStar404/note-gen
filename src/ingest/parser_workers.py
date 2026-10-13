@@ -415,6 +415,7 @@ def ocr_pages(req: dict) -> dict:
     targets = [int(p) for p in req.get("pages", []) if int(p) - 1 < len(pages_meta)]
     dpi = float(req.get("dpi", 150))
     scale = dpi / 72.0
+    render_dir = req.get("render_dir")   # 可选：顺手存页面 PNG（视觉补 OCR 用，本就渲染了）
 
     try:
         engine = RapidOCR()
@@ -431,6 +432,9 @@ def ocr_pages(req: dict) -> dict:
         try:
             page = doc[page_no - 1]
             bitmap = page.render(scale=scale)
+            if render_dir:
+                Path(render_dir).mkdir(parents=True, exist_ok=True)
+                bitmap.save(str(Path(render_dir) / f"page_{page_no:04d}.png"))
             image = bitmap.to_pil()
             width_px, height_px = image.size
             result = engine(image)
