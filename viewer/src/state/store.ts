@@ -33,6 +33,7 @@ interface Store {
   setupOpen: boolean;
   reviewOpen: boolean;
   reviewItems: NoteBlock[];
+  reviewCount: number;
   toast: string | null;
   anchors: Record<string, Anchor>;
 
@@ -54,6 +55,7 @@ interface Store {
   openSettings: (open: boolean) => void;
   openSetup: (open: boolean) => void;
   openReview: (open: boolean) => Promise<void>;
+  refreshReviewCount: () => Promise<void>;
 }
 
 export const useStore = create<Store>((set, get) => ({
@@ -74,6 +76,7 @@ export const useStore = create<Store>((set, get) => ({
   setupOpen: false,
   reviewOpen: false,
   reviewItems: [],
+  reviewCount: 0,
   toast: null,
   anchors: {},
 
@@ -138,10 +141,25 @@ export const useStore = create<Store>((set, get) => ({
   openSettings: (open) => set({ settingsOpen: open }),
   openSetup: (open) => set({ setupOpen: open }),
   openReview: async (open) => {
-    if (!open) return set({ reviewOpen: false });
+    if (!open) {
+      set({ reviewOpen: false });
+      void get().refreshReviewCount();   // 审核完关窗即刷新角标
+      return;
+    }
     const { docId } = get();
     if (!docId) return;
     const { items } = await api.reviewQueue(docId);
-    set({ reviewOpen: true, reviewItems: items });
+    set({ reviewOpen: true, reviewItems: items, reviewCount: items.length });
+  },
+  refreshReviewCount: async () => {
+    // 未审核角标（生成完/切书/关窗后调用）：失败不打扰主界面
+    const { docId } = get();
+    if (!docId) return set({ reviewCount: 0 });
+    try {
+      const { items } = await api.reviewQueue(docId);
+      set({ reviewCount: items.length });
+    } catch {
+      /* 忽略角标刷新失败 */
+    }
   },
 }));

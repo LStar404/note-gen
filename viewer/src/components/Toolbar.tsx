@@ -74,6 +74,8 @@ export default function Toolbar() {
   const openSettings = useStore((s) => s.openSettings);
   const openSetup = useStore((s) => s.openSetup);
   const openReview = useStore((s) => s.openReview);
+  const reviewCount = useStore((s) => s.reviewCount);
+  const refreshReviewCount = useStore((s) => s.refreshReviewCount);
   const setToast = useStore((s) => s.setToast);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<any | null>(null);
@@ -158,6 +160,8 @@ export default function Toolbar() {
     if (t.status === "failed") {
       setToast((kind === "generate" ? "生成失败：" : "任务失败：") + (t.error?.message ?? t.status));
     }
+    // 生成完可能落了 needs_review 块：顺手刷新未审核角标
+    void useStore.getState().refreshReviewCount();
   };
 
   // 任务进度/取消（9.2 /tasks/{id}）；params 供「继续生成」续跑（doc_id/chapter_id）
@@ -266,6 +270,7 @@ export default function Toolbar() {
   // 切换教材/刷新页面：从持久层恢复任务记录（中断的生成保留在列表里，可续跑）
   useEffect(() => {
     void loadTasks();
+    void refreshReviewCount();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docId]);
 
@@ -493,7 +498,12 @@ export default function Toolbar() {
               title="导出笔记：Markdown / LaTeX / Obsidian / Anki，可选整本或当前章节">
         导出
       </button>
-      <button onClick={() => void openReview(true)}>待审核</button>
+      <button onClick={() => void openReview(true)} title="审核 AI 生成的笔记块（needs_review）">
+        待审核
+        {reviewCount > 0 && (
+          <span className="count-badge">{reviewCount > 99 ? "99+" : reviewCount}</span>
+        )}
+      </button>
       <button onClick={() => void openRecords()} title="查看各章生成的时间、模型与结果">生成记录</button>
       {docId && (
         <button

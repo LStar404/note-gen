@@ -400,6 +400,14 @@ select:focus, input:focus, textarea:focus {
 .usage-table input { width: 78px; padding: 4px 7px; }
 .review-row { border-bottom: 1px solid var(--border); padding: 11px 0; }
 
+/* ---------------- 未审核角标 ---------------- */
+.count-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; margin-left: 6px;
+  border-radius: 999px; background: var(--accent); color: #fff;
+  font-size: 11px; font-weight: 700; line-height: 1;
+}
+
 /* ---------------- 导出弹窗 ---------------- */
 .export-grid { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
 .export-grid label {
