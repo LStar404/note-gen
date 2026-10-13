@@ -146,4 +146,6 @@ def match_selection(layout: Layout, doc_id: str, page: int, rects: list[list[flo
             hits.append({**a, "scores": scores, "match": "geometry" if geo_hit else "text"})
     hits.sort(key=lambda h: (-h["scores"]["cover_selection"], -h["scores"]["cover_anchor"],
                              -h["scores"]["iou"], h["reading_order"]))
-    return hits[:max(10, top_k)][:10]
+    # 严格按 match.top_k 截断：原写法 hits[:max(10, top_k)][:10] 恒等于 hits[:10]，
+    # top_k 配置形同虚设（调小不生效、调大不可能）
+    return hits[:max(1, top_k)]

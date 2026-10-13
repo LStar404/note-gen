@@ -39,7 +39,7 @@ def _deep_equal(a: dict, b: dict) -> bool:
 
 
 def merge_candidates(store: DocStore, chapter_id: str, candidates: list[dict], *,
-                     keep_identities: set[tuple] | None = None, mode: str = "merge",
+                     mode: str = "merge",
                      outline_complete: bool = True, now: str | None = None) -> tuple[DocMutation, dict]:
     now = now or utc_now_iso()
     report: dict[str, Any] = {
