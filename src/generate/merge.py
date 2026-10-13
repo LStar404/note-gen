@@ -86,8 +86,13 @@ def merge_candidates(store: DocStore, chapter_id: str, candidates: list[dict], *
         if fill_failed:
             report["failures"].append({"temp_id": tid, "reason": "; ".join(cand.get("_errors", []))})
             if tid in matched:
+                # 旧块保命：再生成失败不动它（5.7 第 1 条）
                 keep_ids.add(matched[tid][1]["id"])
-            continue
+                temp_to_id[tid] = matched[tid][1]["id"]
+                continue
+            # 无旧块可保：不落深渊——按提纲字段落成 needs_review 块进待审核队列
+            # （锚点/引文校验失败曾只进失败清单、内容直接丢弃，用户只能干看）：
+            # 人工补写或删除；下次生成/续跑按身份键匹配后自动更新痊愈
 
         fields = {k: cand.get(k) for k in GENERATION_FIELDS if k in cand}
         if tid in matched:
@@ -116,9 +121,11 @@ def merge_candidates(store: DocStore, chapter_id: str, candidates: list[dict], *
             temp_to_id[tid] = updated["id"]
             continue
 
-        # 未匹配：查墓碑
-        key = identity_key(cand)
-        tomb = next((b for b in tombs if identity_key(b) == key and b["id"] not in {r["id"] for r in new_rows.values()}), None)
+        # 未匹配：查墓碑（失败候选不复活墓碑——不得把已删内容顶着警告又捞回来）
+        tomb = None
+        if not fill_failed:
+            key = identity_key(cand)
+            tomb = next((b for b in tombs if identity_key(b) == key and b["id"] not in {r["id"] for r in new_rows.values()}), None)
         if tomb is not None:
             if tomb.get("generation_protected"):
                 report["suppressed_deleted"].append(tomb["id"])
@@ -156,7 +163,15 @@ def merge_candidates(store: DocStore, chapter_id: str, candidates: list[dict], *
         block.setdefault("sources", [])
         block.setdefault("content_format", "md_latex")
         block.setdefault("basis", "anchored")
-        block.setdefault("status", "ai_generated")
+        if fill_failed:
+            # 待审核占位块：带失败原因与提纲的标题/来源（审核队列可定位对照原文）
+            reason = "; ".join(cand.get("_errors", []))[:160].replace("\n", " ")
+            block["status"] = "needs_review"
+            block["content"] = ("> ⚠ 生成失败（" + (reason or "未知原因") + "）。\n"
+                                "> 本块按提纲保留占位：请人工补写内容或删除本块；"
+                                "下次「继续生成」会自动补全本块。")
+        else:
+            block.setdefault("status", "ai_generated")
         new_rows[block["id"]] = block
         history.append(store.make_history_row(block, block["created_by"], "生成新建", now))
         report["created"].append(block["id"])

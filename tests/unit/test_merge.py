@@ -31,6 +31,51 @@ def _make_block(store: DocStore, ref, *, title: str = "定义", author: str = "a
         author=author, chapter_id="ch01")
 
 
+def test_fill_failed_materializes_into_review(store: DocStore):
+    """锚点/校验类失败候选不落深渊：无旧块时落成 needs_review 占位块进待审核队列。"""
+    ref = _anchor_ref(store)
+    cand = _candidate("t1", "definition", "定义", ref, content="")
+    cand["_status"] = "failed"
+    cand["_errors"] = ["sources_patch 引用了未提供的锚点: a_x"]
+    mutation, report = merge_candidates(store, "ch01", [cand])
+    assert report["failures"], report
+    assert report["created"], report
+    block = next(r for r in mutation.blocks["ch01"] if r["id"] == report["created"][0])
+    assert block["status"] == "needs_review", block
+    assert "生成失败" in block["content"] and "a_x" in block["content"], block["content"]
+    assert block["sources"] and block["sources"][0]["anchor_id"] == ref[0], \
+        "提纲来源必须保留，审核队列要能定位对照原文"
+
+
+def test_fill_failed_matched_keeps_old_block(store: DocStore):
+    """有旧块可保时不动旧块（5.7 第 1 条）：失败只记报告，不落占位块。"""
+    ref = _anchor_ref(store)
+    old = _make_block(store, ref, title="定义", content="旧内容")
+    cand = _candidate("t1", "definition", "定义", ref, content="")
+    cand["_status"] = "failed"
+    cand["_errors"] = ["quote 不匹配锚点原文: a_x"]
+    mutation, report = merge_candidates(store, "ch01", [cand])
+    assert report["failures"], report
+    assert report["created"] == [] and report["updated"] == [], report
+    rows = {r["id"]: r for r in mutation.blocks["ch01"]}
+    assert rows[old["id"]]["content"] == "旧内容", rows[old["id"]]  # 旧块原样
+
+
+def test_fill_failed_does_not_resurrect_tombstone(store: DocStore):
+    """失败候选不得复活墓碑：已删内容不许顶着警告占位又捞回来。"""
+    ref = _anchor_ref(store)
+    old = _make_block(store, ref, title="定义", content="已删内容")
+    store.soft_delete_block(old["id"], author="human")
+    cand = _candidate("t1", "definition", "定义", ref, content="")
+    cand["_status"] = "failed"
+    cand["_errors"] = ["LLM 调用失败"]
+    mutation, report = merge_candidates(store, "ch01", [cand])
+    assert report["restored"] == [], report
+    block = next(r for r in mutation.blocks["ch01"] if r["id"] == report["created"][0])
+    assert block["status"] == "needs_review"
+    assert "已删内容" not in block["content"]
+
+
 def test_protected_block_never_overwritten(store: DocStore):
     ref = _anchor_ref(store)
     block = _make_block(store, ref, author="human")
