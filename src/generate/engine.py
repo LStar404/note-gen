@@ -351,6 +351,9 @@ def generate_chapter(doc_id: str, chapter_id: str, *, layout: Layout | None = No
     # 整章提交 Conflict、几十次 LLM 调用全部作废；merge 本就是按当前状态设计的
     # （保护块跳过），用 merge 时刻的 revision 既不丢用户并发改动、又不误伤在途生成。
     t_commit = time.monotonic()
+    if progress:
+        # 最后一步要有名字：合并/提交/链接此前无进度事件，界面像卡在「填充 N/N」
+        progress({"stage": "link"})
     with _commit_lock(layout, doc_id):
         base_revision = store.data_revision()
         # 失败候选必须交给合并器：保留对应旧块并进报告，不能据此删除（5.7 第 1 条）

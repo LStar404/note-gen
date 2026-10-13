@@ -8,7 +8,10 @@ function progressText(p: any): string {
   if (p.stage === "outline_start") return "提纲 0/" + (p.batches ?? 0) + " 批";
   if (p.stage === "outline" && p.batches) return "提纲 " + (p.batch ?? 0) + "/" + p.batches + " 批";
   if (p.stage === "outline_done") return "提纲完成 " + (p.count ?? 0) + " 项";
+  if (p.stage === "fill_retry") return "重试失败块…（" + (p.count ?? 0) + " 个）";
   if (p.stage === "fill" && p.total) return "填充 " + (p.done ?? 0) + "/" + p.total;
+  if (p.stage === "link") return "提交与链接…";
+  if (p.stage === "done") return "完成";
   if (p.stage === "generate") return p.chapter_id ? "生成 " + p.chapter_id : "生成中";
   if (p.stage === "ingest" && p.phase === "convert") return "解析器转换中…（重型解析器，页数多时较久）";
   if (p.stage === "ingest" && p.phase === "ocr")
@@ -172,9 +175,13 @@ export default function Toolbar() {
   const pollTask = (taskId: string, kind: string) => {
     if (pollingRef.current.has(taskId)) return;   // 同一任务只挂一个轮询器
     pollingRef.current.add(taskId);
+    // 连续失败容忍：曾一次接口抖动（含服务重启）就永久停掉轮询器——
+    // 任务行从此冻结在「运行中 · 最后一步」，实际任务早已跑完（用户实测「老是卡最后一步」）
+    let misses = 0;
     const timer = window.setInterval(async () => {
       try {
         const t = await api.getTask(taskId);
+        misses = 0;
         setTasks((list) => list.map((x) => {
           if (x.task_id !== taskId) return x;
           const pct = progressPercent(kind, t.progress);
@@ -187,7 +194,17 @@ export default function Toolbar() {
           pollingRef.current.delete(taskId);
           refreshAfterTask(kind, t);
         }
-      } catch {
+      } catch (e: any) {
+        misses += 1;
+        // 任务已被删除（404）：移除该行；其余错误重试 5 次再放弃（防永久冻结）
+        if (e?.status === 404) {
+          window.clearInterval(timer);
+          timersRef.current.delete(timer);
+          pollingRef.current.delete(taskId);
+          setTasks((list) => list.filter((x) => x.task_id !== taskId));
+          return;
+        }
+        if (misses < 5) return;
         window.clearInterval(timer);
         timersRef.current.delete(timer);
         pollingRef.current.delete(taskId);
@@ -268,6 +285,20 @@ export default function Toolbar() {
   useEffect(() => {
     void loadTasks();
     void refreshReviewCount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docId]);
+
+  // 兜底同步：轮询器是尽力而为，定期拉服务端真相同步——任何冻结/失联自愈
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      void loadTasks();
+      void refreshReviewCount();
+    }, 30000);
+    timersRef.current.add(t);
+    return () => {
+      window.clearInterval(t);
+      timersRef.current.delete(t);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docId]);
 
