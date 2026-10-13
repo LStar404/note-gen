@@ -11,6 +11,8 @@ function progressText(p: any): string {
   if (p.stage === "fill" && p.total) return "填充 " + (p.done ?? 0) + "/" + p.total;
   if (p.stage === "generate") return p.chapter_id ? "生成 " + p.chapter_id : "生成中";
   if (p.stage === "ingest" && p.phase === "convert") return "解析器转换中…（重型解析器，页数多时较久）";
+  if (p.stage === "ingest" && p.phase === "ocr")
+    return "扫描页 OCR 识别中…（" + (p.pages_total ?? 0) + " 页，页数多时较久）";
   if (p.stage === "ingest" && p.pages_total) return "解析 " + (p.pages_done ?? 0) + "/" + p.pages_total + " 页";
   if (p.stage === "anchor" && p.total) return "锚定 " + (p.done ?? 0) + "/" + p.total + " 章";
   return String(p.stage ?? "");
@@ -38,6 +40,7 @@ function progressPercent(kind: string, p: any): number | null {
     // 解析占 5-90%、锚定 90-98%：进度条与「解析 363/364 页」文字必须对得上；
     // 转换期（重型解析器整书转换，页数多时十几分钟）单独显示状态不显示假进度
     if (p.stage === "ingest" && p.phase === "convert") return 4;
+    if (p.stage === "ingest" && p.phase === "ocr") return 88;   // 解析段尾部，条与状态一致
     if (p.stage === "ingest" && p.pages_total) {
       return 5 + Math.round(((p.pages_done ?? 0) / p.pages_total) * 85);
     }

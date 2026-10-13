@@ -724,6 +724,11 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
     # 纯图片/扫描页 OCR（5.1.1）：批量一次调用，避免每页起一个 worker 进程
     if ocr_mode != "off" and any(p["needs_ocr"] for p in pending):
         targets = [p["index"] + 1 for p in pending if p["needs_ocr"]]
+        if progress:
+            # OCR 是整书第二大段时间（实测数百页 CPU 识别 ~25 分钟），无页级信号
+            # 就会像卡死在最后一页——单独报阶段状态
+            progress({"stage": "ingest", "phase": "ocr", "pages_done": 0,
+                      "pages_total": len(targets), "parser": adapter.name})
         ocr_out = ocr_pages_via_worker(
             pdf_path, targets,
             [_pdf_page_meta(reader.pages[i]) for i in range(n_pages)],
