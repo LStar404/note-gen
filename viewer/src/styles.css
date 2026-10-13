@@ -408,6 +408,11 @@ select:focus, input:focus, textarea:focus {
   font-size: 11px; font-weight: 700; line-height: 1;
 }
 
+/* ---------------- 块操作小按钮 ---------------- */
+.block-mini-btn {
+  font-size: 11px; padding: 1px 7px; margin-right: 4px; white-space: nowrap;
+}
+
 /* ---------------- 导出完成提示 ---------------- */
 .export-path {
   display: block; padding: 8px 10px; margin: 8px 0;

@@ -51,6 +51,20 @@ export const api = {
   listDocs: () => api.get<{ docs: DocSummary[] }>("/api/v1/docs"),
   blockTypes: () => api.get<{ profile: string; types: any[]; presets: string[]; custom: any[] }>(
     "/api/v1/block-types"),
+  blockAiEdit: (docId: string, blockId: string, instruction: string) =>
+    api.post<{ block_id: string; proposal: string; original: string }>(
+      "/api/v1/docs/" + docId + "/blocks/" + blockId + "/ai-edit", { instruction }),
+  blockApplyEdit: (docId: string, blockId: string, body: any) =>
+    api.post<{ block: NoteBlock }>(
+      "/api/v1/docs/" + docId + "/blocks/" + blockId + "/apply-edit", body),
+  blockAddLink: (docId: string, blockId: string, targetId: string, baseRevision?: number) =>
+    api.post<{ block: NoteBlock }>(
+      "/api/v1/docs/" + docId + "/blocks/" + blockId + "/links",
+      { target_id: targetId, base_revision: baseRevision }),
+  blockRemoveLink: (docId: string, blockId: string, targetId: string, baseRevision?: number) =>
+    api.del<{ block: NoteBlock }>(
+      "/api/v1/docs/" + docId + "/blocks/" + blockId + "/links/" + targetId
+      + (baseRevision != null ? "?base_revision=" + baseRevision : "")),
   qbankList: (docId: string) =>
     api.get<{ count: number; entries: any[] }>("/api/v1/docs/" + docId + "/qbank"),
   qbankUpload: (docId: string, file: File) => {

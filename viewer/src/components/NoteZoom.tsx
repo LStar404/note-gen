@@ -72,6 +72,26 @@ export default function NoteZoom() {
           {block.basis === "synthesis" && <span className="badge synthesis">AI 归纳</span>}
           <button
             className="note-zoom-edit"
+            title="AI 编辑此块"
+            onClick={() => {
+              useStore.getState().openAiEdit(block.id);
+              closeZoom();
+            }}
+          >
+            ✨AI 改
+          </button>
+          <button
+            className="note-zoom-edit"
+            title="关联其他知识点"
+            onClick={() => {
+              useStore.getState().openLinks(block.id);
+              closeZoom();
+            }}
+          >
+            🔗 关联
+          </button>
+          <button
+            className="note-zoom-edit"
             title="编辑此卡（切到源码视图）"
             onClick={() => {
               // 与视图切换同款草稿守卫：不静默丢弃未保存草稿

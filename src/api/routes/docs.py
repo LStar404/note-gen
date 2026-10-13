@@ -289,6 +289,108 @@ def rename_doc(request: Request, doc_id: str, body: dict):
     return {"doc_id": doc_id, "title": title}
 
 
+AI_EDIT_PROMPT = """你是笔记编辑助手。请按用户指令修改下面这块笔记。
+要求：只输出修改后的笔记正文（md_latex）；保持引文标记 [n]、图片占位符 ![fig_xxxxxxxx]、
+公式 LaTeX 不受破坏；不得编造笔记之外的事实；没有要求修改的部分保持原样。
+块标题：{title}
+块类型：{type_id}
+用户指令：{instruction}
+
+<original>
+{content}
+</original>"""
+
+
+@router.post("/api/v1/docs/{doc_id}/blocks/{block_id}/ai-edit")
+def block_ai_edit(request: Request, doc_id: str, block_id: str, body: dict):
+    """单块 AI 编辑：按指令产出修改建议（**不落盘**）；应用是显式人工动作（5.2）。"""
+    from src.core.store import DocStore as _DS
+
+    st = state(request)
+    store = _DS(st.layout, doc_id)
+    block = store.blocks_by_id().get(block_id)
+    if not block:
+        raise NotFound(f"块不存在: {block_id}")
+    instruction = str((body or {}).get("instruction") or "").strip()
+    if not instruction:
+        raise InputError("缺少修改指令")
+    prompt = AI_EDIT_PROMPT.format(title=block.get("title", ""), type_id=block.get("type", ""),
+                                   instruction=instruction, content=block.get("content", ""))
+    schema = {"type": "object", "properties": {"content": {"type": "string"}},
+              "required": ["content"], "additionalProperties": False}
+    models = (st.config.get("generate", {}).get("models", {}) or {})
+    model = models.get("fill") or models.get("default")
+    resp = st.client.complete("edit", [{"role": "user", "content": prompt}], schema=schema,
+                              max_tokens=6000, temperature=0.3, model=model)
+    out = resp.get("output") or {}
+    proposal = str(out.get("content") or "").strip()
+    if not proposal:
+        raise InputError("AI 没有产出修改建议，请换一种指令")
+    return {"block_id": block_id, "proposal": proposal, "original": block.get("content", "")}
+
+
+@router.post("/api/v1/docs/{doc_id}/blocks/{block_id}/apply-edit")
+def block_apply_edit(request: Request, doc_id: str, block_id: str, body: dict):
+    """应用修改：用户点确认 = 人工动作（author=human → manually_edited + 保护位，5.2），
+    走 update_block 历史与 CAS（5.6/7.3），原内容进历史可回溯。"""
+    from src.core.store import DocStore as _DS
+
+    st = state(request)
+    store = _DS(st.layout, doc_id)
+    if not store.blocks_by_id().get(block_id):
+        raise NotFound(f"块不存在: {block_id}")
+    content = str((body or {}).get("content") or "")
+    if not content.strip():
+        raise InputError("修改内容为空")
+    patch = {"content": content}
+    if str((body or {}).get("title") or "").strip():
+        patch["title"] = str(body["title"]).strip()
+    block = store.update_block(block_id, patch,
+                               expected_revision=(body or {}).get("base_revision"),
+                               author="human", message="AI 编辑（人工确认应用）")
+    return {"block": block}
+
+
+@router.post("/api/v1/docs/{doc_id}/blocks/{block_id}/links")
+def block_add_link(request: Request, doc_id: str, block_id: str, body: dict):
+    """关联知识点：把目标块加入本块 links（跨章可链，回指检查）。"""
+    from src.core.store import DocStore as _DS
+
+    st = state(request)
+    store = _DS(st.layout, doc_id)
+    block = store.blocks_by_id().get(block_id)
+    if not block:
+        raise NotFound(f"块不存在: {block_id}")
+    target = str((body or {}).get("target_id") or "").strip()
+    if not target or target == block_id:
+        raise InputError("目标块非法（不能关联自己）")
+    if not store.blocks_by_id().get(target):
+        raise NotFound(f"目标块不存在: {target}")
+    links = list(dict.fromkeys(list(block.get("links") or []) + [target]))
+    updated = store.update_block(block_id, {"links": links},
+                                 expected_revision=(body or {}).get("base_revision"),
+                                 author="human", message="关联知识点")
+    return {"block": updated}
+
+
+@router.delete("/api/v1/docs/{doc_id}/blocks/{block_id}/links/{target_id}")
+def block_remove_link(request: Request, doc_id: str, block_id: str, target_id: str,
+                      base_revision: int | None = None):
+    """取消关联。"""
+    from src.core.store import DocStore as _DS
+
+    st = state(request)
+    store = _DS(st.layout, doc_id)
+    block = store.blocks_by_id().get(block_id)
+    if not block:
+        raise NotFound(f"块不存在: {block_id}")
+    links = [ln for ln in (block.get("links") or []) if ln != target_id]
+    updated = store.update_block(block_id, {"links": links},
+                                 expected_revision=base_revision,
+                                 author="human", message="取消关联")
+    return {"block": updated}
+
+
 @router.get("/api/v1/docs/{doc_id}/qbank")
 def qbank_list(request: Request, doc_id: str):
     """参考题库（用户上传的课后习题/往年题）：条目列表与数量。"""

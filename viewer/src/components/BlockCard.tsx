@@ -32,6 +32,8 @@ function BlockCard({ block, selected, onSelect }: {
   const setHighlight = useStore((s) => s.setHighlight);
   const openZoom = useStore((s) => s.openZoom);
   const typeInfo = useStore((s) => s.typeInfo);
+  const openAiEdit = useStore((s) => s.openAiEdit);
+  const openLinks = useStore((s) => s.openLinks);
   const setPdfPage = useStore((s) => s.setPdfPage);
   const setToast = useStore((s) => s.setToast);
 
@@ -73,6 +75,26 @@ function BlockCard({ block, selected, onSelect }: {
         <span className={`badge status-${block.status}`}>{STATUS_CN[block.status] ?? block.status}</span>
         {block.generation_protected && <span className="badge protected">已保护</span>}
         {block.basis === "synthesis" && <span className="badge synthesis">AI 归纳</span>}
+        <button
+          className="block-mini-btn"
+          title="AI 编辑此块"
+          onClick={(e) => {
+            e.stopPropagation();
+            openAiEdit(block.id);
+          }}
+        >
+          ✨AI 改
+        </button>
+        <button
+          className="block-mini-btn"
+          title="关联其他知识点"
+          onClick={(e) => {
+            e.stopPropagation();
+            openLinks(block.id);
+          }}
+        >
+          🔗{(block.links ?? []).length > 0 ? String(block.links!.length) : "关联"}
+        </button>
         <button
           className="block-zoom-btn"
           title="放大阅读"

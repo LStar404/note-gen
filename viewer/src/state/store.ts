@@ -36,6 +36,13 @@ interface Store {
   reviewCount: number;
   // 块类型注册表（学科模板 + 用户自定义）：卡片图标/名称与生成同一事实源
   typeInfo: Record<string, { name: string; icon: string }>;
+  // 单块 AI 编辑 / 知识点关联
+  aiEditBlockId: string | null;
+  linkBlockId: string | null;
+  openAiEdit: (id: string) => void;
+  closeAiEdit: () => void;
+  openLinks: (id: string) => void;
+  closeLinks: () => void;
   toast: string | null;
   anchors: Record<string, Anchor>;
 
@@ -80,6 +87,12 @@ export const useStore = create<Store>((set, get) => ({
   reviewItems: [],
   reviewCount: 0,
   typeInfo: {},
+  aiEditBlockId: null,
+  linkBlockId: null,
+  openAiEdit: (id) => set({ aiEditBlockId: id }),
+  closeAiEdit: () => set({ aiEditBlockId: null }),
+  openLinks: (id) => set({ linkBlockId: id }),
+  closeLinks: () => set({ linkBlockId: null }),
   toast: null,
   anchors: {},
 
