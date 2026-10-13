@@ -49,6 +49,8 @@ export const api = {
   del: <T>(url: string, body?: unknown) => request<T>("DELETE", url, body),
 
   listDocs: () => api.get<{ docs: DocSummary[] }>("/api/v1/docs"),
+  openPath: (path: string) => api.post<{ ok: boolean; path: string }>(
+    "/api/v1/system/open-path", { path }),
   getManifest: (docId: string) => api.get<any>("/api/v1/docs/" + docId),
   deleteDoc: (docId: string) =>
     api.del<any>("/api/v1/docs/" + docId, { confirmed: true }),

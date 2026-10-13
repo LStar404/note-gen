@@ -161,7 +161,14 @@ export default function Toolbar() {
         setToast(kind === "rebuild" ? "重建完成，已打开文档" : "导入完成，已打开文档");
       }
     } else if (kind === "export" && t.status === "succeeded") {
-      setToast("导出完成：" + ((t.result?.paths ?? []).length || 0) + " 个文件");
+      // 「导出的文件在哪」必须答清：弹窗列文件 + 目录 + 一键打开文件夹
+      const paths: string[] = (t.result?.paths ?? []).map((p: string) => String(p));
+      const dir = paths[0] ? paths[0].split(/[\\/]/).slice(0, -1).join("\\") : "";
+      setExportResult({
+        files: paths.map((p) => p.split(/[\\/]/).pop() ?? p),
+        dir,
+      });
+      setToast("导出完成：" + (paths.length || 0) + " 个文件");
     }
     if (t.status === "failed") {
       setToast((kind === "generate" ? "生成失败：" : "任务失败：") + (t.error?.message ?? t.status));
@@ -403,6 +410,8 @@ export default function Toolbar() {
   const [exportOpen, setExportOpen] = useState(false);
   const [expFormat, setExpFormat] = useState("md");
   const [expScope, setExpScope] = useState<"book" | "chapter">("book");
+  // 导出完成提示：文件在哪 + 一键打开文件夹
+  const [exportResult, setExportResult] = useState<{ files: string[]; dir: string } | null>(null);
   // 全书生成选项弹窗：跳过已生成章节（默认）/ 全量重生成
   const [bookOpen, setBookOpen] = useState(false);
   const [regenAll, setRegenAll] = useState(false);
@@ -806,6 +815,30 @@ export default function Toolbar() {
               );
             })}
             <button onClick={() => setRecords(null)}>关闭</button>
+          </div>
+        </div>
+      )}
+      {exportResult && (
+        <div className="modal-mask" onClick={() => setExportResult(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>导出完成</h2>
+            <div className="muted">共 {exportResult.files.length} 个文件，保存在：</div>
+            <code className="export-path">{exportResult.dir}</code>
+            <div className="export-files">
+              {exportResult.files.map((f) => (
+                <div key={f} className="muted">· {f}</div>
+              ))}
+            </div>
+            <div className="export-actions">
+              <button onClick={() => setExportResult(null)}>知道了</button>
+              <button
+                className="primary"
+                onClick={() =>
+                  void api.openPath(exportResult.dir).catch((e: any) => setToast("打开文件夹失败：" + e.message))}
+              >
+                打开文件夹
+              </button>
+            </div>
           </div>
         </div>
       )}

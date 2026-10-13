@@ -187,6 +187,40 @@ def trigger_export(request: Request, body: dict):
     return JSONResponse({"task_id": task["task_id"]}, status_code=202)
 
 
+@router.post("/api/v1/system/open-path")
+def open_path(request: Request, body: dict):
+    """在系统文件管理器中打开工作区内路径（导出完成提示「文件在哪」用）。
+
+    只允许工作区内路径（防任意路径探测）；打开目录而非文件本身，
+    避免 .apkg/.tex 被关联程序意外拉起。
+    """
+    import os
+    import subprocess
+    import sys as _sys
+
+    st = state(request)
+    rel = str((body or {}).get("path") or "")
+    if not rel:
+        raise InputError("缺少 path")
+    root = Path(st.layout.root).resolve()
+    target = (root / rel).resolve() if not Path(rel).is_absolute() else Path(rel).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise InputError("只允许打开工作区内的路径")
+    if not target.exists():
+        raise NotFound(f"路径不存在: {rel}")
+    if target.is_file():
+        target = target.parent
+    if _sys.platform == "win32":
+        os.startfile(str(target))          # 本机应用：打开自己的导出目录
+    elif _sys.platform == "darwin":
+        subprocess.Popen(["open", str(target)])
+    else:
+        subprocess.Popen(["xdg-open", str(target)])
+    return {"ok": True, "path": str(target)}
+
+
 @router.get("/api/v1/tasks")
 def list_tasks(request: Request, doc_id: str | None = None, limit: int = 20):
     """最近任务（持久化于 runtime.db）：刷新/重启后恢复任务记录与续跑入口。"""

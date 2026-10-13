@@ -408,6 +408,14 @@ select:focus, input:focus, textarea:focus {
   font-size: 11px; font-weight: 700; line-height: 1;
 }
 
+/* ---------------- 导出完成提示 ---------------- */
+.export-path {
+  display: block; padding: 8px 10px; margin: 8px 0;
+  background: var(--panel-2, rgba(0, 0, 0, .05)); border-radius: 8px;
+  font-size: 12px; word-break: break-all;
+}
+.export-files { max-height: 200px; overflow-y: auto; margin: 6px 0; font-size: 12px; }
+
 /* ---------------- 导出弹窗 ---------------- */
 .export-grid { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
 .export-grid label {
