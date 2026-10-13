@@ -70,6 +70,30 @@ def test_generate_quiz_shapes_and_saves(sample_doc):
     assert client.calls[0]["schema"], "出题必须带结构化 schema"
 
 
+def test_notes_text_covers_all_chapters():
+    """整本出题曾只取前几块（前面章节吃光预算）：按章均分后每章都要进摘要。"""
+    from src.generate.quiz import _notes_text
+
+    by_ch = {f"ch{i:02d}": [{"title": f"ch{i:02d}-b{j}", "content": "内" * 300}
+                            for j in range(30)]
+             for i in range(1, 5)}
+    text = _notes_text(by_ch, max_chars=4000)
+    for ch in by_ch:
+        assert f"{ch}-b0" in text, f"{ch} 的代表块必须进摘要"
+
+
+def test_quiz_count_garbage_is_input_error(sample_doc):
+    """count 非数字必须 400，不得 500。"""
+    layout, doc_id = sample_doc
+    app = create_app(layout.root)
+    with TestClient(app, base_url="http://127.0.0.1:8787") as client:
+        headers = {"X-Local-Token": app.state.app_state.token_value}
+        r = client.post(f"/api/v1/docs/{doc_id}/quiz", json={"count": "abc"}, headers=headers)
+        assert r.status_code == 400, r.text
+        r = client.post(f"/api/v1/docs/{doc_id}/quiz", json={"kinds": "choice"}, headers=headers)
+        assert r.status_code == 400, "无笔记出题应报 4xx 而非 500: " + r.text
+
+
 def test_quiz_and_qbank_api_roundtrip(sample_doc):
     layout, doc_id = sample_doc
     _seed_block(DocStore(layout, doc_id), DocStore(layout, doc_id).chapter_ids()[0])

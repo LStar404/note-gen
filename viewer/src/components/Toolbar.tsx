@@ -465,6 +465,11 @@ export default function Toolbar() {
       setToast("至少选一种题型");
       return;
     }
+    if (quizScope === "chapter" && !chapterId) {
+      // 不静默改成整本：用户以为在考本章，实际拿到全书卷 = 范围错觉
+      setToast("选了「仅当前章节」但还没选章节——请在顶部选章节，或改选整本范围");
+      return;
+    }
     setQuizBusy(true);
     try {
       const r = await api.quiz(docId, {

@@ -106,15 +106,27 @@ QUIZ_PROMPT = """你是大学期末出题人。请基于给定笔记出练习题
 </note_data>"""
 
 
-def _notes_text(blocks: list[dict], max_chars: int = 8000) -> str:
+def _notes_text(blocks_by_chapter: dict[str, list[dict]], max_chars: int = 8000) -> str:
+    """笔记摘要：**按章均分预算**再取块。
+
+    曾按顺序取满预算——整本书几百块时前面章节吃光额度，「整本出题」实际只考
+    前几页（期末主场景失效）。按章均分保证每章都有代表块进入出题依据。"""
+    chapters = list(blocks_by_chapter)
+    if not chapters:
+        return ""
+    per_ch = max(300, max_chars // len(chapters))
     parts: list[str] = []
-    total = 0
-    for b in blocks:
-        seg = f"## {b.get('title', '')}\n{(b.get('content') or '').strip()}"
-        if total + len(seg) > max_chars and parts:
-            break
-        parts.append(seg)
-        total += len(seg)
+    for ch in chapters:
+        cur = 0
+        head = []
+        for b in blocks_by_chapter[ch]:
+            seg = f"## {b.get('title', '')}\n{(b.get('content') or '').strip()}"
+            if cur + len(seg) > per_ch and head:
+                break
+            head.append(seg)
+            cur += len(seg)
+        if head:
+            parts.append("\n\n".join(head))
     return "\n\n".join(parts)
 
 
@@ -122,15 +134,16 @@ def generate_quiz(client, *, store, chapter_ids: list[str], kinds: list[str], co
                   difficulty: str, model: str | None, config: dict,
                   qbank: list[dict] | None = None, max_samples: int = 6) -> dict:
     """出题主流程：笔记 + 题库样本 → LLM → 校验 → 落盘返回。"""
-    from src.core.block_types import type_guide  # noqa: F401  （保留生成侧依赖对齐）
     from src.generate.prompts import compact_schema
 
     kinds = [k for k in kinds if k in QUESTION_TYPES] or ["choice", "short"]
     count = max(1, min(30, int(count or 10)))
-    blocks: list[dict] = []
+    blocks_by_chapter: dict[str, list[dict]] = {}
     for ch in chapter_ids:
-        blocks.extend(b for b in store.block_rows(ch) if not b.get("deleted_at"))
-    if not blocks:
+        rows = [b for b in store.block_rows(ch) if not b.get("deleted_at")]
+        if rows:
+            blocks_by_chapter[ch] = rows
+    if not blocks_by_chapter:
         raise ValueError("所选范围没有笔记内容，无法出题")
     samples = []
     for e in (qbank or [])[:max_samples]:
@@ -141,7 +154,7 @@ def generate_quiz(client, *, store, chapter_ids: list[str], kinds: list[str], co
         difficulty=difficulty or "期末水平",
         qbank_samples="\n".join(samples) if samples else "（无参考题库：按课后习题常见风格出题）",
         quiz_schema=compact_schema(build_quiz_schema(kinds)),
-        notes=_notes_text(blocks),
+        notes=_notes_text(blocks_by_chapter),
     )
     messages = [{"role": "system", "content": "只输出合法 JSON 对象。"},
                 {"role": "user", "content": prompt}]

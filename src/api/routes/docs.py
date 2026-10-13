@@ -344,13 +344,22 @@ def quiz_generate(request: Request, doc_id: str, body: dict):
     chapter_id = (body or {}).get("chapter_id")
     chapters = [chapter_id] if chapter_id else [c["chapter_id"] for c in store.manifest().get("chapters", [])]
     kinds = (body or {}).get("kinds") or ["choice", "short"]
-    count = int((body or {}).get("count") or 10)
+    if not isinstance(kinds, list):
+        kinds = ["choice", "short"]
+    try:
+        count = int((body or {}).get("count") or 10)
+    except (TypeError, ValueError):
+        raise InputError("count 必须是整数")
     difficulty = str((body or {}).get("difficulty") or "期末水平")
     models = (st.config.get("generate", {}).get("models", {}) or {})
     model = models.get("quiz") or models.get("fill")
-    quiz = generate_quiz(st.client, store=store, chapter_ids=chapters, kinds=kinds,
-                         count=count, difficulty=difficulty, model=model,
-                         config=st.config, qbank=load_qbank(st.layout.doc_dir(doc_id)))
+    try:
+        quiz = generate_quiz(st.client, store=store, chapter_ids=chapters, kinds=kinds,
+                             count=count, difficulty=difficulty, model=model,
+                             config=st.config, qbank=load_qbank(st.layout.doc_dir(doc_id)))
+    except ValueError as exc:
+        # 产品规则类错误（无笔记/结果为空）归 4xx，不给用户 500
+        raise InputError(str(exc))
     return quiz
 
 
