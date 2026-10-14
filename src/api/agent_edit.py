@@ -176,6 +176,28 @@ def execute_plan(state, *, doc_id: str, plan_id: str, confirmed: bool = False) -
     return out
 
 
+# 工具必填参数：LLM 漏字段/给 null 时要说人话
+_REQUIRED_ARGS: dict[str, tuple[str, ...]] = {
+    "update_block": ("block_id",),
+    "delete_block": ("block_id",),
+    "create_block": ("chapter_id", "type", "title", "content"),
+    "link_blocks": ("from_block_id", "to_block_id"),
+}
+
+
+def validate_args(tool: str, args: dict) -> None:
+    """工具参数校验：
+
+    曾经的两种坏体验——LLM 少给 block_id 时，`args.get("block_id")` 的 None 一路流到
+    store.get_block()，界面弹出「块不存在: None」（把 Python 的 None 抛给用户）；
+    而 run_tool 用 `args["block_id"]` 取值，缺字段直接 KeyError→500。
+    统一在这里拦下并给出可读原因。"""
+    for key in _REQUIRED_ARGS.get(tool, ()):
+        val = args.get(key)
+        if val is None or (isinstance(val, str) and not val.strip()):
+            raise InputError(f"agent 计划缺少参数 {key}（工具 {tool}），请让它重新规划")
+
+
 def _targets_of(tool: str, args: dict) -> list[str]:
     if tool in ("update_block", "delete_block"):
         return [args.get("block_id")] if args.get("block_id") else []
@@ -186,6 +208,7 @@ def _targets_of(tool: str, args: dict) -> list[str]:
 
 def check_scope(store: DocStore, scope: dict, tool: str, args: dict) -> None:
     """服务端强制 scope（9.4）：越界调用一律拒绝。"""
+    validate_args(tool, args)
     chapter = scope["chapter_id"]
     if tool == "update_block":
         bid = args.get("block_id")
@@ -224,6 +247,7 @@ def check_scope(store: DocStore, scope: dict, tool: str, args: dict) -> None:
 
 def run_tool(store: DocStore, tool: str, args: dict, *, author: str = "agent",
              plan_id: str | None = None, unlocked_for_agent: bool = False) -> dict:
+    validate_args(tool, args)
     if tool == "update_block":
         block = store.update_block(args["block_id"],
                                    {k: v for k, v in args.items() if k in
