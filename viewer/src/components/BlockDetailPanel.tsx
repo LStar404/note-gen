@@ -27,7 +27,12 @@ export default function BlockDetailPanel() {
       setDetail(null);
       return;
     }
-    api.getBlock(selectedBlockId).then(setDetail).catch(() => setDetail(null));
+    api.getBlock(selectedBlockId).then((d: any) => {
+      setDetail(d);
+      // 来源页码要显示 p.N：本面板此前只预取「选区命中」的锚点，
+      // 块自己的来源全渲染成「p.?」（卡片/放大层都有预取，唯独这里漏了）
+      void fetchAnchors((d?.block?.sources ?? []).map((s: any) => s.anchor_id));
+    }).catch(() => setDetail(null));
     void api.listAllBlocks(docId ?? "").then((r) => {
       const map: Record<string, string> = {};
       for (const b of r.items ?? []) map[b.id] = b.title;
