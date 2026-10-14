@@ -77,6 +77,7 @@ export default function BlockEditor({ block, mode }: { block: NoteBlock; mode: "
             setTitle(block.title);
             setContent(block.content);
             setError(null);
+            setDraft(null);   // 还原后不再是草稿态：否则切换视图误报「未保存草稿」
           }}
         >
           还原

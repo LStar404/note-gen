@@ -200,7 +200,10 @@ export default function PdfPane(): ReactElement {
   }, [highlight, selectionHits, pdfPage, scale, renderKey]);
 
   const scrollTarget = useMemo(
-    () => (highlight && highlight.page === pdfPage ? highlights[highlights.length - 1] ?? null : null),
+    // 高亮锚点被 push 在数组首位，曾取「最后一个」元素——有选区命中时会滚到错误矩形
+    () => (highlight && highlight.page === pdfPage
+      ? highlights.find((h) => h.anchorId === highlight.anchor_id) ?? null
+      : null),
     [highlight, highlights, pdfPage]
   );
 

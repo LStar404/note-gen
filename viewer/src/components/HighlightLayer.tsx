@@ -26,7 +26,7 @@ export default function HighlightLayer({ rects, scrollTarget }: {
       {rects.map((h, i) => (
         <div
           key={h.anchorId ?? i}
-          ref={i === rects.length - 1 && scrollTarget ? targetRef : undefined}
+          ref={scrollTarget && h === scrollTarget ? targetRef : undefined}   // 绑到目标本身，不是「最后一个矩形」
           className={h.pulse ? "highlight pulse" : "highlight"}
           style={{
             left: h.left + "px",
