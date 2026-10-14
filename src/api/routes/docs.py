@@ -786,10 +786,16 @@ def _build_generate_run(st, doc_id: str, chapter_id, model, resume: bool = False
             return {"doc_id": doc_id, "chapter_id": ch, "status": "failed",
                     "failures": [{"stage": "generate", "reason": reason}]}
 
+        # 全局性故障（余额耗尽/密钥失效）一经出现就中止余下章节：
+        # 曾逐章重试到全部失败，用户只看到「部分完成」而不知是没余额
+        stop: dict = {"reason": None}
+
         def outcome(ch: str) -> dict:
             """执行一章；可隔离的失败转成失败报告，不可隔离的继续上抛。"""
             if is_cancelled():
                 raise TaskCancelled("任务已取消")
+            if stop["reason"]:
+                return failed_report(ch, "已中止（" + stop["reason"][:120] + "），本章未尝试")
             if skip_done:
                 # 已生成完才跳：complete 报告 + 锚点指纹未变（报告即事实源）；
                 # 重锚定/换提示词想重生成 → skip_done=False 全量重跑
@@ -824,6 +830,9 @@ def _build_generate_run(st, doc_id: str, chapter_id, model, resume: bool = False
                 # 一章缺锚点/提交冲突/校验失败不得拖垮整本书的生成任务
                 # （原实现只隔离 PipelineError/ConflictError，一章 quote 校验
                 # 失败会让后面所有章节连跑的机会都没有）
+                if getattr(exc, "code", "") in ("LLM_QUOTA_EXHAUSTED", "LLM_AUTH_FAILED"):
+                    # 余额/密钥是全局故障：不中止的话余下每章都白跑一遍再失败
+                    stop["reason"] = str(exc)
                 return failed_report(ch, str(exc))
 
         reports: list[dict] = []
@@ -843,6 +852,12 @@ def _build_generate_run(st, doc_id: str, chapter_id, model, resume: bool = False
                 # 取消/意外异常：不再等未完成章节（它们会在下一个检查点自行退出）
                 pool.shutdown(wait=False, cancel_futures=True)
             reports = [by_ch[ch] for ch in chapters if ch in by_ch]
+        if stop["reason"]:
+            done = sum(1 for r in reports if r.get("status") in ("complete", "skipped"))
+            raise PipelineError(
+                f"生成中止：{stop['reason'][:300]}——已完成 {done} 章；"
+                f"充值或更换模型（设置 → 供应商/任务路由）后点「继续生成」，"
+                f"会自动跳过已完成章节")
         if reports and all(r.get("status") == "failed" for r in reports):
             # 全军覆没要以 failed 结局收场（10.4 可解释），不能谎报 succeeded
             reasons = "；".join(
