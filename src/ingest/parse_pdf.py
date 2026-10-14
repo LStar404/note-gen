@@ -344,6 +344,14 @@ def _decode_worker_stdout(mode: str, stdout: bytes, stderr: bytes | None = None)
     raise PipelineError(f"worker[{mode}] 输出非法 JSON: {tail}")
 
 
+def _bulk_has_text(bulk: dict | None) -> bool:
+    """整文档转换结果里是否真有文字块（「ok=True + 全空页」不算成功）。"""
+    for pg in (bulk or {}).get("pages") or []:
+        if pg.get("blocks"):
+            return True
+    return False
+
+
 def ocr_pages_via_worker(pdf_path: str | Path, pages: list[int], pages_meta: list[dict],
                          *, python: str | None = None, dpi: int = 150,
                          render_dir: str | None = None) -> dict | None:
@@ -592,6 +600,10 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
     pages_meta_all = [_pdf_page_meta(reader.pages[i]) for i in range(n_pages)]
     adapter = None
     bulk = None
+    # 「成功但零文本」的候选：不当作成功（继续试下一个转换器），全链都空时留作
+    # OCR 兜底——纯图片书正是走这条路（实测 docling 对图片书返回 ok+全空块，
+    # 静默导入成整本空页，用户侧表现为「生成失败/没有锚点」）
+    empty_fallback: tuple | None = None
     chain_notes: list[str] = []
     for name in chain:
         try:
@@ -610,11 +622,20 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
                 progress({"stage": "ingest", "pages_done": 0, "pages_total": n_pages,
                           "parser": ad.name, "phase": "convert"})
             bulk = ad.parse_document(pdf_path, pages_meta=pages_meta_all)
+            if not _bulk_has_text(bulk):
+                chain_notes.append(f"{name} 未识别到文本（转下一个）")
+                empty_fallback = empty_fallback or (adapter, bulk)
+                adapter, bulk = None, None
+                continue
             break
         except (InputError, PipelineError) as exc:
             chain_notes.append(f"{name} 解析失败（{str(exc)[:80]}）")
             adapter, bulk = None, None
             continue
+    if adapter is None and empty_fallback is not None:
+        # 全链都没有文本层：仍按兜底解析器继续，交给 OCR 环节（纯图片书的正常入口）
+        adapter, bulk = empty_fallback
+        chain_notes.append("全部转换器均无文本层：转 OCR 识别")
     if adapter is None:
         raise PipelineError("没有可用的解析器：" + ("；".join(chain_notes) or "未知原因"))
     for note in chain_notes:
@@ -814,6 +835,14 @@ def parse_pdf(pdf_path: str | Path, out_dir: str | Path, parser: str = "auto", *
               + "；".join(coord_skipped[:5]), file=sys.stderr)
     if n_pages and failed / n_pages > 0.05:
         raise PipelineError(f"失败页数 {failed}/{n_pages} 超过 5%，请更换解析器")
+    total_blocks = sum(len(p["page_json"]["blocks"]) for p in pending)
+    if n_pages and total_blocks == 0:
+        # 静默导入成整本空页是最糟的失败形态（任务显示「完成」、生成时才发现没锚点）：
+        # 宁可响亮报错并给出可执行建议
+        raise PipelineError(
+            "整本未识别到任何文本（0 块）：可能是纯图片书且 OCR 未生效——"
+            "请在「配置指南」确认 .venv-parsers 与 OCR（rapidocr）可用，"
+            "或改用 marker/docling 解析器后重试")
 
     chapters = detect_chapters(reader, page_records, doc_id, pages_dir=pages_dir, profile=profile,
                                override=chapters_override or (config or {}).get("chapters_override"))

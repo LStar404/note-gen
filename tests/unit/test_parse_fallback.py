@@ -56,6 +56,86 @@ def test_scan_route_falls_back_through_chain(sample_doc, monkeypatch, capsys):
     assert "docker binary not found" in err, err
 
 
+def _empty_ok_adapter(name: str, n_pages: int = 2):
+    """「成功但零文本」的转换器（实测 docling 对纯图片书如此）——不得算成功。"""
+
+    class Fake:
+        def __init__(self, python=None):
+            self.name = name
+            self.version = "0"
+
+        def parse_document(self, pdf_path, pages_meta=None):
+            return {"ok": True, "warnings": [], "coordinate": {},
+                    "pages": [{"status": "blank", "blocks": []} for _ in range(n_pages)]}
+
+    return Fake
+
+
+def _fake_pypdf(monkeypatch, pp, blocks: list):
+    """把非 bulk 的 pypdf 适配器换成受控实现（2 页样例走顺序路径，不触发进程池）。"""
+    class Fake:
+        def __init__(self, python=None):
+            self.name = "pypdf"
+            self.version = "0"
+
+        def parse_page(self, reader, i):
+            return {"status": "ok" if blocks else "blank", "blocks": list(blocks)}
+
+    monkeypatch.setattr(pp, "PypdfAdapter", Fake)
+
+
+def test_zero_text_converter_is_not_success(sample_doc, monkeypatch, capsys):
+    """「ok=True + 全空页」不算转换成功：链继续试下一个（曾静默导入成整本空页）。"""
+    import src.ingest.parse_pdf as pp
+
+    layout, doc_id = sample_doc
+    pdf = layout.textbooks_dir / "sample-la.pdf"
+    if not pdf.exists():
+        import shutil
+
+        src_pdf = layout.root / "sample.pdf"
+        if not src_pdf.exists():
+            pytest.skip("sample pdf 不在工作区")
+        shutil.copy(src_pdf, pdf)
+    monkeypatch.setattr(pp, "_has_text_layer", lambda reader: False)
+    monkeypatch.setattr(pp, "MarkerAdapter", _empty_ok_adapter("marker"))
+    monkeypatch.setattr(pp, "DoclingAdapter", _empty_ok_adapter("docling"))
+    monkeypatch.setattr(pp, "PyMupdfAdapter", _unavailable_adapter("pymupdf"))
+    _fake_pypdf(monkeypatch, pp, [{"type": "paragraph", "level": 0, "text": "兜底文本",
+                                   "bbox": [10.0, 10.0, 100.0, 40.0]}])
+    man = pp.parse_pdf(pdf, layout.ingest_root, "auto", layout=layout,
+                       doc_id="zero-la", title="t")
+    assert man["chapters"]
+    err = capsys.readouterr().err
+    assert "未识别到文本" in err, err
+
+
+def test_all_zero_blocks_fails_loudly(sample_doc, monkeypatch):
+    """全链零文本必须响亮报错（任务不许显示「完成」却产不出锚点）。"""
+    import src.ingest.parse_pdf as pp
+
+    layout, doc_id = sample_doc
+    pdf = layout.textbooks_dir / "sample-la.pdf"
+    if not pdf.exists():
+        import shutil
+
+        src_pdf = layout.root / "sample.pdf"
+        if not src_pdf.exists():
+            pytest.skip("sample pdf 不在工作区")
+        shutil.copy(src_pdf, pdf)
+    monkeypatch.setattr(pp, "_has_text_layer", lambda reader: False)
+    monkeypatch.setattr(pp, "MarkerAdapter", _empty_ok_adapter("marker"))
+    monkeypatch.setattr(pp, "DoclingAdapter", _empty_ok_adapter("docling"))
+    monkeypatch.setattr(pp, "PyMupdfAdapter", _unavailable_adapter("pymupdf"))
+    _fake_pypdf(monkeypatch, pp, [])   # 兜底也不出文本
+    with pytest.raises(PipelineError) as ei:
+        # ocr_mode=off：关掉 OCR 兜底才测得到「全零块」这条闸
+        pp.parse_pdf(pdf, layout.ingest_root, "auto", layout=layout,
+                     doc_id="zero2-la", title="t",
+                     config={"parser": {"ocr_mode": "off"}})
+    assert "未识别到任何文本" in str(ei.value), ei.value
+
+
 def test_explicit_parser_does_not_fall_back(sample_doc, monkeypatch):
     """显式指定解析器不回退：用户点名即意图，失败要报清楚而不是悄悄换引擎。"""
     import shutil

@@ -97,7 +97,11 @@ def test_ocr_disabled_by_config(sample_pdf, workspace: Layout, monkeypatch):
     class BlankAdapter(pp.PypdfAdapter):
         def parse_page(self, reader, page_index):
             meta = pp._pdf_page_meta(reader.pages[page_index])
-            return {"status": "blank", "blocks": [], "meta": meta,
+            # 首块给文本（否则整本零文本会被「零文本闸」拒绝），其余页空白：
+            # 空白页本该 needs_ocr=True——正好检验 ocr_mode=off 真的不触发 OCR
+            blocks = ([{"type": "paragraph", "level": 0, "text": "正文",
+                        "bbox": [10.0, 10.0, 200.0, 40.0]}] if page_index == 0 else [])
+            return {"status": "ok" if blocks else "blank", "blocks": blocks, "meta": meta,
                     "source_space": "pdf_user_space", "source_to_pdf": [1, 0, 0, 1, 0, 0]}
 
     monkeypatch.setattr(pp, "get_adapter", lambda name, **kw: BlankAdapter())
