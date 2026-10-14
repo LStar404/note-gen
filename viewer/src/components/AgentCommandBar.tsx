@@ -19,6 +19,11 @@ export default function AgentCommandBar() {
 
   const plan = async () => {
     if (!instruction.trim()) return;
+    if (!selectedBlockId && !chapterId) {
+      // 否则请求打到 chapters/undefined/agent-edit，报错令人困惑
+      setToast("请先选择章节或块，再给 agent 下指令");
+      return;
+    }
     setAgent({ running: true, error: null, diff: null });
     try {
       const res = await api.agentEdit(url, { mode: "plan", instruction });
@@ -51,6 +56,12 @@ export default function AgentCommandBar() {
     for (const item of agent.diff?.applied ?? []) {
       if (!item.block_id) continue;
       try {
+        // 新建块没有「上一版本」可回滚：撤销 = 软删除（曾静默漏掉、却提示「已撤销」）
+        if (item.tool === "create_block") {
+          const { block } = await api.getBlock(item.block_id);
+          await api.deleteBlock(item.block_id, { expected_revision: block.revision });
+          continue;
+        }
         const { block, history } = await api.getBlock(item.block_id);
         const current = Number(block.revision);
         const prev = history
