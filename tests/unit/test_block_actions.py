@@ -95,6 +95,40 @@ def test_ai_edit_handles_unstable_model_output_shapes(sample_doc):
         assert r.status_code == 400, "空白产出必须拒收: " + r.text
 
 
+def test_deleted_blocks_invisible_to_agent_and_panes(sample_doc):
+    """软删块不得被 agent 编辑/关联、不得出现在教材侧栏（include_deleted 默认含已删块的坑）。"""
+    import pytest
+
+    from src.api.agent_edit import run_tool
+    from src.core.errors import NotFound
+
+    layout, doc_id = sample_doc
+    store = DocStore(layout, doc_id)
+    ch = store.chapter_ids()[0]
+    a = _seed(store, ch)
+    b = store.create_block({"type": "motivation", "title": "块B", "content": "内容 B。",
+                            "sources": [], "basis": "synthesis", "order": 2.0},
+                           author="human", chapter_id=ch)
+    store.soft_delete_block(a["id"], expected_revision=a["revision"])
+    with pytest.raises(NotFound):
+        run_tool(store, "update_block",
+                 {"block_id": a["id"], "content": "x", "message": "m"},
+                 author="agent", unlocked_for_agent=True)
+    with pytest.raises(NotFound):
+        run_tool(store, "link_blocks",
+                 {"from_block_id": b["id"], "to_block_id": a["id"]},
+                 author="agent", unlocked_for_agent=True)
+
+    app = create_app(layout.root)
+    with TestClient(app, base_url="http://127.0.0.1:8787") as client:
+        headers = {"X-Local-Token": app.state.app_state.token_value}
+        for page in range(1, 4):
+            r = client.get(f"/api/v1/docs/{doc_id}/pages/{page}/blocks", headers=headers)
+            assert r.status_code == 200, r.text
+            ids = [x["block_id"] for x in r.json()]
+            assert a["id"] not in ids, f"教材侧栏不得展示已删块: page {page} -> {ids}"
+
+
 def test_links_add_remove_and_validation(sample_doc):
     layout, doc_id = sample_doc
     store = DocStore(layout, doc_id)

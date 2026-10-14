@@ -491,7 +491,9 @@ class DocStore:
         # 乐观锁基线 = 读取时刻（I7/11.6.3）：commit 时才读 data_revision 会把
         # 读-改-写窗口内的并发改动静默冲掉（整文件替换丢更新）
         base_revision = self.data_revision()
-        block = dict(self.get_block(block_id))
+        # 单点拒已删块：get_block 默认含软删块，PATCH/agent 全部经此处——
+        # 不拒则删除后的块仍可被静默改写（恢复/回滚各有专用方法，不受影响）
+        block = dict(self.get_block(block_id, include_deleted=False))
         if expected_revision is not None and int(block["revision"]) != int(expected_revision):
             raise RevisionConflict("revision 冲突", detail={"current_revision": block["revision"]})
         if author == "agent" and block.get("status") == "manually_edited" and not unlocked_for_agent:

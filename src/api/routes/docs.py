@@ -622,7 +622,11 @@ def page_blocks(request: Request, doc_id: str, page: int):
     store = DocStore(st.layout, doc_id)
     out = []
     for r in rows:
-        block = store.get_block(r["block_id"])
+        try:
+            # 索引可能残留已删块：教材侧栏不得把删除的笔记当活块展示
+            block = store.get_block(r["block_id"], include_deleted=False)
+        except Exception:
+            continue
         out.append({"block_id": block["id"], "type": block["type"], "title": block["title"],
                     "summary": (block.get("content") or "")[:120], "status": block["status"]})
     return out
@@ -660,7 +664,7 @@ def match_selection(request: Request, doc_id: str, body: dict):
         blocks = []
         for bid in h.get("note_block_ids", []) if isinstance(h.get("note_block_ids"), list) else []:
             try:
-                b = store.get_block(bid)
+                b = store.get_block(bid, include_deleted=False)   # 已删块不进选区匹配
                 blocks.append({"block_id": b["id"], "title": b["title"], "type": b["type"],
                                "summary": (b.get("content") or "")[:120], "status": b["status"]})
             except Exception:

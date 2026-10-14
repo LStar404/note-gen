@@ -46,7 +46,7 @@ AGENT_TOOLS = [
 
 def _scope(store: DocStore, *, block_id: str | None = None, chapter_id: str | None = None) -> dict:
     if block_id:
-        block = store.get_block(block_id)
+        block = store.get_block(block_id, include_deleted=False)
         return {"kind": "block", "block_id": block_id, "chapter_id": block["chapter_id"]}
     if chapter_id:
         store.chapter(chapter_id)
@@ -62,7 +62,7 @@ def plan_edit(state, *, doc_id: str, instruction: str, block_id: str | None = No
     anchors_by_id = store.anchors_by_id()
 
     if scope["kind"] == "block":
-        targets = [store.get_block(block_id)]
+        targets = [store.get_block(block_id, include_deleted=False)]
     else:
         targets = store.block_rows(scope["chapter_id"])[:20]
 
@@ -101,7 +101,7 @@ def plan_edit(state, *, doc_id: str, instruction: str, block_id: str | None = No
         if call["name"] in ("update_block", "delete_block", "link_blocks"):
             target = args.get("block_id") or args.get("from_block_id")
             if target:
-                affected_revisions[target] = store.get_block(target)["revision"]
+                affected_revisions[target] = store.get_block(target, include_deleted=False)["revision"]
         proposed.append({"tool": call["name"], "args": args, "message": args.get("message", "")})
 
     plan_id = "p_" + uuid.uuid4().hex[:12]
@@ -134,7 +134,7 @@ def execute_plan(state, *, doc_id: str, plan_id: str, confirmed: bool = False) -
     store = DocStore(state.layout, doc_id)
     scope_kind, scope_target = session["scope"].split(":", 1)
     scope = {"kind": scope_kind, "block_id": scope_target if scope_kind == "block" else None,
-             "chapter_id": scope_target if scope_kind == "chapter" else store.get_block(scope_target)["chapter_id"]}
+             "chapter_id": scope_target if scope_kind == "chapter" else store.get_block(scope_target, include_deleted=False)["chapter_id"]}
 
     applied, errors = [], []
     for i, call in enumerate(session.get("confirmed_calls", [])):
@@ -149,7 +149,7 @@ def execute_plan(state, *, doc_id: str, plan_id: str, confirmed: bool = False) -
             # 计划快照校验：目标块在 plan 之后被改过 → 中止，防止覆盖并发改动
             for target_id in _targets_of(call["tool"], args):
                 if target_id in snapshot:
-                    current = store.get_block(target_id)["revision"]
+                    current = store.get_block(target_id, include_deleted=False)["revision"]
                     if int(current) != snapshot[target_id]:
                         raise ConflictError(
                             f"块 {target_id} 在计划确认后被修改（{snapshot[target_id]} → {current}），"
@@ -189,7 +189,7 @@ def check_scope(store: DocStore, scope: dict, tool: str, args: dict) -> None:
     chapter = scope["chapter_id"]
     if tool == "update_block":
         bid = args.get("block_id")
-        block = store.get_block(bid)
+        block = store.get_block(bid, include_deleted=False)
         if scope["kind"] == "block" and bid != scope["block_id"]:
             raise SchemaViolation("update_block 越界：只能修改目标块", code="SCOPE_VIOLATION")
         if block["chapter_id"] != chapter:
@@ -203,7 +203,7 @@ def check_scope(store: DocStore, scope: dict, tool: str, args: dict) -> None:
             raise SchemaViolation("create_block 越界：只能在目标章创建", code="SCOPE_VIOLATION")
     elif tool == "delete_block":
         bid = args.get("block_id")
-        block = store.get_block(bid)
+        block = store.get_block(bid, include_deleted=False)
         if scope["kind"] == "block" and bid != scope["block_id"]:
             raise SchemaViolation("delete_block 越界：只能删除目标块", code="SCOPE_VIOLATION")
         if block["chapter_id"] != chapter:
@@ -213,11 +213,11 @@ def check_scope(store: DocStore, scope: dict, tool: str, args: dict) -> None:
         dst = args.get("to_block_id")
         if scope["kind"] == "block" and src != scope["block_id"]:
             raise SchemaViolation("link_blocks 越界：from_block_id 必须是目标块", code="SCOPE_VIOLATION")
-        src_block = store.get_block(src)
+        src_block = store.get_block(src, include_deleted=False)
         if src_block["chapter_id"] != chapter:
             # 章级范围也要挡住跨章 from——否则可借 link 改到别章块的 links
             raise SchemaViolation("link_blocks 越界：跨章", code="SCOPE_VIOLATION")
-        store.get_block(dst)
+        store.get_block(dst, include_deleted=False)
     else:
         raise SchemaViolation(f"未知工具: {tool}")
 
@@ -245,7 +245,8 @@ def run_tool(store: DocStore, tool: str, args: dict, *, author: str = "agent",
                                         message=args.get("message", "agent 删除"))
         return {"tool": tool, "block_id": block["id"], "revision": block["revision"]}
     if tool == "link_blocks":
-        from_block = store.get_block(args["from_block_id"])
+        from_block = store.get_block(args["from_block_id"], include_deleted=False)
+        store.get_block(args["to_block_id"], include_deleted=False)   # 目标必须是活块
         links = list(from_block.get("links", []))
         if args["to_block_id"] not in links:
             links.append(args["to_block_id"])
