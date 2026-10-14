@@ -83,8 +83,27 @@ def _outline_title(reader) -> str | None:
     return None
 
 
+# 章题样式（第X章/Chapter/Lecture/Part/附录）与小节号（1.4 / 2.8.1 = 小节不是章）
+_CH_PAT = re.compile(
+    r"(第\s*[一二三四五六七八九十百零\d]+\s*[章讲部编篇]|Chapter\s+\d+|Lecture\s+\d+|"
+    r"Part\s+[IVXLC\d]+|附录\s*[A-Z\d]?|Appendix)", re.IGNORECASE)
+_SEC_NUM_PAT = re.compile(r"^\d+\.\d+(\.\d+)*\s*")
+_PAGE_TAIL_PAT = re.compile(r"\s+\d{1,4}\s*$")   # 书签标题常粘目录页码（z-library 书实测）
+_TOC_TITLE_PAT = re.compile(r"^(目录|目\s*次|Contents|Table of Contents)$", re.IGNORECASE)
+
+
+def _clean_outline_title(title: str) -> str:
+    t = re.sub(r"[.\s\u2026]+$", "", (title or "").strip())
+    return _PAGE_TAIL_PAT.sub("", t).strip()
+
+
 def _from_outline(reader) -> list[tuple[str, int]]:
-    """目录优先：解析 PDF 书签/目录页，取各章标题与起始页（深度 0 为章）。"""
+    """目录优先：解析 PDF 书签/目录页，取各章标题与起始页（深度 0 为章）。
+
+    扁平书签是最大陷阱（z-library 等电子书常见）：章与节目录项同级、标题还粘页码，
+    全盘当章会把「1.4策略 5」这类小节切成假章。过滤顺序：
+    1) 剥页码/目录页；2) 有 ≥2 个「第X章」样式 → 只留章样式；
+    3) 否则至少剔除小节号条目（1.4 / 2.8.1）。"""
     starts: list[tuple[str, int]] = []
 
     def walk(items, depth=0):
@@ -92,18 +111,29 @@ def _from_outline(reader) -> list[tuple[str, int]]:
             if isinstance(item, list):
                 walk(item, depth + 1)
                 continue
-            title = getattr(item, "title", None) or str(item)
+            title = _clean_outline_title(getattr(item, "title", None) or str(item))
+            if not title or _TOC_TITLE_PAT.match(title):
+                continue
             try:
                 page = reader.get_destination_page_number(item) + 1
             except Exception:
                 continue
-            if depth == 0 and title.strip():
-                starts.append((title.strip(), page))
+            if depth == 0:
+                starts.append((title, page))
 
     try:
         walk(reader.outline or [])
     except Exception:
         return []
+    chapter_like = [t for t in starts if _CH_PAT.search(t[0]) and not _SEC_NUM_PAT.match(t[0])]
+    if len(chapter_like) >= 2:
+        # 章样式足够时只留章；但前言/序等前置页书签比 front-matter 兜底更准，保留
+        front = [t for t in starts
+                 if re.match(r"^(前言|前记|序|引言|引论|绪论|Preface|Foreword|Introduction)", t[0])
+                 and t[1] <= (chapter_like[0][1] if chapter_like else 10 ** 9)]
+        starts = sorted(front + chapter_like, key=lambda t: t[1])
+    else:
+        starts = [t for t in starts if not _SEC_NUM_PAT.match(t[0])] or starts
     starts.sort(key=lambda t: t[1])
     return starts
 
