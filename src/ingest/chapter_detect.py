@@ -93,8 +93,15 @@ _TOC_TITLE_PAT = re.compile(r"^(目录|目\s*次|Contents|Table of Contents)$", 
 
 
 def _clean_outline_title(title: str) -> str:
-    t = re.sub(r"[.\s\u2026]+$", "", (title or "").strip())
-    return _PAGE_TAIL_PAT.sub("", t).strip()
+    # 先剔控制字符：书签标题尾部常藏 \x00（pypdf UTF-16 转换残留，实测 z-library 书），
+    # 不剔则页码剥离正则够不着（页码后面跟 NUL）。注意 sanitize_control_chars 是
+    # 转义不是删除，这里要的是直接去掉。
+    t = re.sub(r"[\x00-\x1f\x7f]", "", (title or "").strip())
+    # 「 . 149」这类点线引导+页码：剥完页码点线又成尾巴，循环两轮收干净
+    for _ in range(2):
+        t = _PAGE_TAIL_PAT.sub("", t)
+        t = re.sub(r"[.\s\u2026]+$", "", t)
+    return t.strip()
 
 
 def _from_outline(reader) -> list[tuple[str, int]]:

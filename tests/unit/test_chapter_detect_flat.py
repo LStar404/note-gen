@@ -39,3 +39,6 @@ def test_outline_without_chapter_style_at_least_drops_sections():
 def test_clean_title():
     assert _clean_outline_title("第 1 章基本概念 1") == "第 1 章基本概念"
     assert _clean_outline_title("第 2 章  状态值  15") == "第 2 章  状态值"
+    # 书签标题尾部藏 NUL（pypdf UTF-16 残留）时页码剥离必须仍生效（实测样本）
+    assert _clean_outline_title("第 2 章状态值  15\x00") == "第 2 章状态值"
+    assert _clean_outline_title("第 8 章值函数 . 149\x00") == "第 8 章值函数"
