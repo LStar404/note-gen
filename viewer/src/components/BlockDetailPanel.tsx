@@ -19,6 +19,8 @@ export default function BlockDetailPanel() {
   const setToast = useStore((s) => s.setToast);
   const [detail, setDetail] = useState<{ block: NoteBlock; history: any[] } | null>(null);
   const [pageBlocks, setPageBlocks] = useState<any[]>([]);
+  // 跨章链接要按标题显示：blocks 只有当前章，曾把其他章的链接显示成原始块 id
+  const [titleById, setTitleById] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!selectedBlockId) {
@@ -26,7 +28,12 @@ export default function BlockDetailPanel() {
       return;
     }
     api.getBlock(selectedBlockId).then(setDetail).catch(() => setDetail(null));
-  }, [selectedBlockId, blocks]);
+    void api.listAllBlocks(docId ?? "").then((r) => {
+      const map: Record<string, string> = {};
+      for (const b of r.items ?? []) map[b.id] = b.title;
+      setTitleById(map);
+    }).catch(() => undefined);
+  }, [selectedBlockId, blocks, docId]);
 
   useEffect(() => {
     if (!docId || !pdfPage) return;
@@ -40,11 +47,7 @@ export default function BlockDetailPanel() {
   }, [docId, pdfPage]);
 
   useEffect(() => {
-    const ids = [
-      ...selectionHits.flatMap((h: any) => (h.blocks ?? []).map((b: any) => b.block_id)),
-    ];
     void fetchAnchors(selectionHits.map((h: any) => h.anchor_id));
-    void ids;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectionHits]);
 
@@ -69,7 +72,10 @@ export default function BlockDetailPanel() {
       <h3>本页关联块（p.{pdfPage}）</h3>
       {pageBlocks.length === 0 && <div className="empty">本页没有关联块</div>}
       {pageBlocks.map((b) => (
-        <button key={b.block_id} className="hit-block" onClick={() => useStore.getState().selectBlock(b.block_id)}>
+        <button key={b.block_id} className="hit-block" onClick={() => {
+          useStore.getState().selectBlock(b.block_id);
+          document.getElementById("block-" + b.block_id)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }}>
           <MathText text={b.title} />
         </button>
       ))}
@@ -137,8 +143,11 @@ export default function BlockDetailPanel() {
           {detail.block.links.length === 0 && <div className="muted">无</div>}
           {detail.block.links.map((l) =>
             l.startsWith("b_") ? (
-              <button key={l} onClick={() => useStore.getState().selectBlock(l)}>
-                <MathText text={blocks.find((b) => b.id === l)?.title ?? l} />
+              <button key={l} onClick={() => {
+                useStore.getState().selectBlock(l);
+                document.getElementById("block-" + l)?.scrollIntoView({ behavior: "smooth", block: "center" });
+              }}>
+                <MathText text={titleById[l] ?? blocks.find((b) => b.id === l)?.title ?? l} />
               </button>
             ) : (
               <div key={l} className="muted">{l}</div>

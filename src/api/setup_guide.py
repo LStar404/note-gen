@@ -115,6 +115,7 @@ def build_setup_status(state_obj) -> dict:
         f"{sys.version.split()[0]}（要求 >= {MIN_PYTHON[0]}.{MIN_PYTHON[1]}）",
         None if py_ok else "请安装 Python 3.11 或更高版本"))
 
+    data_detail = ""
     data_writable = layout.data_dir.exists() and layout.data_dir.is_dir()
     if data_writable:
         try:
