@@ -55,6 +55,12 @@ export default function ReviewQueue() {
               <b><MathText text={b.title} /></b> <span className="muted">{STATUS_CN[b.status]}</span>
             </div>
             <div className="muted">{(b.content ?? "").slice(0, 120)}</div>
+            <div className="muted" style={{ fontSize: 11 }}>
+              记录时间 {(b as any).updated_at
+                ? String((b as any).updated_at).replace("T", " ").slice(0, 19)
+                : "—"}
+              （余额/网络类失败是当时的记录：充值或稍后点「继续生成」会自动补全本块）
+            </div>
             <button onClick={() => void locateBlock(b)}>定位并对照原文</button>
             <button onClick={() => void confirm(b.id, b.revision)}>确认已修</button>
           </div>
