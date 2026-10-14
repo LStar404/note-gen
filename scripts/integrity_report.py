@@ -99,37 +99,69 @@ def scan_doc(doc: DocStore, *, verbose: bool = False) -> dict:
 
 
 def fix_quotes(doc: DocStore, issues: list[tuple[str, str, str, str]], *, apply: bool,
-               log=print) -> tuple[int, int]:
-    """把不符的引文替换为锚点内容中的真实片段（CAS + 历史，author=human 之外用 agent）。"""
+               unlock: bool = False, log=print) -> tuple[int, int]:
+    """把不符的引文替换为锚点内容中的真实片段（CAS + 历史）。
+
+    unlock=True 时额外清除这些块的 generation_protected（等价 UI 的「允许重新生成」），
+    好让它们之后被正常重生成时自动刷新成干净引文——人工块的锁用 unlocked_for_agent 突破，
+    因为这是用户明确授权的修复动作。"""
+    from src.core.store import DocMutation
+    from src.core.text import utc_now_iso
+
     fixed = skipped = 0
+    # 必须「按章一次性提交」：引文校验是整章范围的——同章里但凡还剩一条坏引文，
+    # 任何单块提交都会被拒（实测逐块修 13 处只成功 3 处）。
+    by_chapter: dict[str, dict[str, dict[str, str]]] = {}
     for block_id, anchor_id, _old, new in issues:
         if not new:
             skipped += 1
             continue
-        block = doc.get_block(block_id, include_deleted=False)
-        sources = []
-        touched = False
-        for s in block.get("sources") or []:
-            item = dict(s)
-            if item.get("anchor_id") == anchor_id and not touched:
-                item["quote"] = new
-                touched = True
-            sources.append(item)
-        if not touched:
-            skipped += 1
+        block = doc.get_block(block_id, include_deleted=True)
+        by_chapter.setdefault(block["chapter_id"], {}).setdefault(block_id, {})[anchor_id] = new
+
+    for chapter_id, per_block in by_chapter.items():
+        now = utc_now_iso()
+        rows = [dict(b) for b in doc.block_rows(chapter_id, include_deleted=True)]
+        changed: list[dict] = []
+        for row in rows:
+            patch = per_block.get(row["id"])
+            if not patch:
+                continue
+            touched = 0
+            sources = []
+            for s in row.get("sources") or []:
+                item = dict(s)
+                new_quote = patch.get(item.get("anchor_id"))
+                if new_quote and item.get("quote") != new_quote:
+                    item["quote"] = new_quote
+                    touched += 1
+                sources.append(item)
+            if not touched:
+                skipped += 1      # 补丁没匹配到任何来源（例如锚点已不在该块 sources 里）
+                continue
+            row["sources"] = sources
+            note = "修复与锚点不符的引文"
+            if unlock and row.get("generation_protected"):
+                row["generation_protected"] = False
+                note += "；允许重新生成覆盖"
+            row["revision"] = int(row.get("revision") or 0) + 1
+            row["updated_at"] = now
+            changed.append(row)
+            log(f"  {'修复' if apply else '将修复'} {row['id']}（{touched} 条引文）"
+                + ("＋解锁" if unlock and not row.get("generation_protected") else ""))
+        if not changed:
             continue
-        log(f"  {'修复' if apply else '将修复'} {block_id} @ {anchor_id}: {new[:50]!r}")
         if not apply:
-            fixed += 1
+            fixed += len(changed)
             continue
+        history = [doc.make_history_row(b, "agent", "修复与锚点不符的引文", now) for b in changed]
         try:
-            doc.update_block(block_id, {"sources": sources},
-                             expected_revision=block.get("revision"),
-                             author="agent", message="修复与锚点不符的引文")
-            fixed += 1
-        except Exception as exc:      # 人工块上锁等：跳过并如实报告
-            log(f"    ⚠️ 跳过 {block_id}: {exc}")
-            skipped += 1
+            doc.commit(DocMutation(blocks={chapter_id: rows}, history=history),
+                       base_revision=doc.data_revision(), check_quotes=True)
+            fixed += len(changed)
+        except Exception as exc:
+            log(f"    ⚠️ {chapter_id} 提交失败：{exc}")
+            skipped += len(changed)
     return fixed, skipped
 
 
@@ -142,6 +174,8 @@ def main() -> int:
     ap.add_argument("--doc", help="只查指定 doc_id")
     ap.add_argument("--fix-quotes", action="store_true", help="预览引文修复")
     ap.add_argument("--apply", action="store_true", help="真正写入（配合 --fix-quotes）")
+    ap.add_argument("--unlock", action="store_true",
+                    help="修引文后清除这些块的保护位（允许之后重生成刷新引文）")
     args = ap.parse_args()
 
     layout = Layout(ROOT)
@@ -165,7 +199,8 @@ def main() -> int:
             print(f"    ⚠️ {b} 的锚点原文本身是乱码，修引文没意义——建议重新生成该块/该章"
                   f"（片段：{cand[:40]!r}）")
         if st["bad_quotes"] and args.fix_quotes:
-            fixed, skipped = fix_quotes(doc, st["bad_quotes"], apply=args.apply)
+            fixed, skipped = fix_quotes(doc, st["bad_quotes"], apply=args.apply,
+                                        unlock=args.unlock)
             print(f"    {'已修复' if args.apply else '可修复'} {fixed} 处，跳过 {skipped} 处")
     print()
     print(f"合计：引文不符 {total_bad} 处，来源缺失 {total_missing} 处")
