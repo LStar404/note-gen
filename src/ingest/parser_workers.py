@@ -432,10 +432,12 @@ def ocr_pages(req: dict) -> dict:
         try:
             page = doc[page_no - 1]
             bitmap = page.render(scale=scale)
-            if render_dir:
-                Path(render_dir).mkdir(parents=True, exist_ok=True)
-                bitmap.save(str(Path(render_dir) / f"page_{page_no:04d}.png"))
             image = bitmap.to_pil()
+            if render_dir:
+                # 必须存 PIL 副本：bitmap.save() 会破坏 pdfium 位图，
+                # 随后的 OCR 拿到空图（实测 0 块 vs 正常 47 块——曾让整本书全变空页）
+                Path(render_dir).mkdir(parents=True, exist_ok=True)
+                image.save(str(Path(render_dir) / f"page_{page_no:04d}.png"))
             width_px, height_px = image.size
             result = engine(image)
             txts = getattr(result, "txts", None)
