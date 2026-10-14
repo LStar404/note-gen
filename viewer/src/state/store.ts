@@ -141,8 +141,21 @@ export const useStore = create<Store>((set, get) => ({
   loadBlocks: async () => {
     const { docId, chapterId } = get();
     if (!docId || !chapterId) return;
-    const { items } = await api.listBlocks(docId, chapterId);
-    set({ blocks: items });
+    // 章块接口是游标分页（limit 默认 100、上限 200）：此前前端只取首页——
+    // 282 块的章只加载前 100 块，用户以为「没生成完」（数据其实都在，只是没拉）
+    const all: NoteBlock[] = [];
+    let cursor: string | null = null;
+    try {
+      for (let guard = 0; guard < 25; guard++) {   // 25 × 200 = 5000 块上限，防御死循环
+        const r = await api.listBlocks(docId, chapterId, false, 200, cursor);
+        all.push(...(r.items ?? []));
+        if (!r.next_cursor) break;
+        cursor = r.next_cursor;
+      }
+    } catch {
+      /* 翻页中数据变更（CURSOR_STALE）等：先展示已取到的部分，后续刷新会补齐 */
+    }
+    set({ blocks: all });
   },
   selectBlock: (blockId) => set({ selectedBlockId: blockId }),
   openZoom: (blockId) => set({ zoomBlockId: blockId }),

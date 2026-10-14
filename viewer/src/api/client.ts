@@ -95,9 +95,12 @@ export const api = {
     "/api/v1/docs/" + docId + "/refresh-figures", {}),
   pdfUrl: (docId: string) => "/api/v1/docs/" + docId + "/pdf",
   figureUrl: (docId: string, figureId: string) => "/api/v1/docs/" + docId + "/figures/" + figureId,
-  listBlocks: (docId: string, chapterId: string, includeDeleted = false) =>
+  listBlocks: (docId: string, chapterId: string, includeDeleted = false,
+               limit = 200, cursor?: string | null) =>
     api.get<{ items: NoteBlock[]; next_cursor: string | null; data_revision: number }>(
-      "/api/v1/docs/" + docId + "/chapters/" + chapterId + "/blocks?include_deleted=" + (includeDeleted ? 1 : 0)
+      "/api/v1/docs/" + docId + "/chapters/" + chapterId + "/blocks?include_deleted="
+      + (includeDeleted ? 1 : 0) + "&limit=" + limit
+      + (cursor ? "&cursor=" + encodeURIComponent(cursor) : "")
     ),
   reviewQueue: (docId: string) =>
     api.get<{ items: NoteBlock[] }>("/api/v1/docs/" + docId + "/blocks?status=needs_review"),
@@ -127,7 +130,7 @@ export const api = {
   exportDoc: (body: any) => api.post<{ task_id: string }>("/api/v1/export", body),
   getTask: (taskId: string) => api.get<any>("/api/v1/tasks/" + taskId),
   cancelTask: (taskId: string) => api.post<any>("/api/v1/tasks/" + taskId + "/cancel"),
-  listTasks: (docId?: string | null, limit = 12) =>
+  listTasks: (docId?: string | null, limit = 50) =>
     api.get<{ items: any[] }>(
       "/api/v1/tasks?limit=" + limit + (docId ? "&doc_id=" + encodeURIComponent(docId) : "")),
   deleteTask: (taskId: string) => api.del<any>("/api/v1/tasks/" + taskId),
