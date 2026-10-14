@@ -30,13 +30,15 @@
 9. [命令行参考](#命令行参考)
 10. [配置参考](#配置参考)
 11. [解析器与 OCR](#解析器与-ocr)
-12. [接入大模型](#接入大模型)
-13. [数据与目录布局](#数据与目录布局)
-14. [架构概览](#架构概览)
-15. [测试与质量](#测试与质量)
-16. [常见问题（排错喵）](#常见问题排错喵)
-17. [安全说明](#安全说明)
-18. [路线图](#路线图)
+12. [显卡与依赖（N 卡 / 核显 / A 卡）](#显卡与依赖n-卡--核显--a-卡)
+13. [接入大模型](#接入大模型)
+14. [数据与目录布局](#数据与目录布局)
+15. [架构概览](#架构概览)
+16. [测试与质量](#测试与质量)
+17. [常见问题（排错喵）](#常见问题排错喵)
+18. [密钥与隐私（不会进仓库喵）](#密钥与隐私不会进仓库喵)
+19. [安全说明](#安全说明)
+20. [路线图](#路线图)
 
 ---
 
@@ -326,6 +328,71 @@ python scripts/tech_validation_11.py      # 生成实测报告
 
 ---
 
+## 显卡与依赖（N 卡 / 核显 / A 卡）
+
+先说结论喵：**生成笔记走的是云端大模型 API，GPU 帮不上忙**——本机显卡只影响**解析阶段**（marker / docling 的版面模型，以及可选的 OCR 加速）。
+
+### 本机实测环境（N 卡 CUDA，可以直接抄喵）
+
+```
+.venv-parsers
+├── torch 2.14.1+cu130 · torchvision 0.29.1+cu130      # CUDA 13.0
+├── onnxruntime 1.31.0（CPU 后端） · rapidocr 2.0.6     # 扫描页 OCR
+├── pymupdf 1.28.2 · docling 2.137.0 · marker-pdf 2.0.0
+├── pillow 10.4.0（marker/surya 要求 <11，千万别升！）
+└── pypdfium2 5.10.1
+torch.version.cuda = 13.0 · cuda_available = True
+device = NVIDIA GeForce RTX 5060 Laptop GPU
+```
+
+N 卡安装：
+
+```bash
+python -m venv .venv-parsers
+.venv-parsers/Scripts/python -m pip install marker-pdf docling rapidocr onnxruntime pypdfium2
+# GPU 版 torch：走官方 cu130 索引（cu128 最高只到 2.11.0，新卡必须 cu130）
+.venv-parsers/Scripts/python -m pip install --proxy '' \
+  --index-url https://download.pytorch.org/whl/cu130 torch==2.14.1+cu130 torchvision==0.29.1+cu130
+.venv-parsers/Scripts/python -m pip install "pillow==10.4.0"   # 装完 torch 把它钉回来
+```
+
+两个坑（本机真踩过喵）：`--proxy ''` 用来绕开失效的 pip 代理（本机曾配过 `127.0.0.1:7890`，早就没在听了）；`pillow` 必须留在 10.x——装 GPU 版 torch 时很容易被顶到 11，然后 marker/surya 就报错。
+
+### 核显 / 没有独显（CPU 方案，功能齐全喵）
+
+全部功能都能用，只是解析慢：
+
+```bash
+.venv-parsers/Scripts/python -m pip install \
+  --index-url https://download.pytorch.org/whl/cpu torch torchvision
+```
+
+- **数字版 PDF**：保持 `parser.default: auto` → 走 pypdf，百页秒级，**完全不碰显卡**
+- **扫描书**：OCR 本来就在 CPU 跑（onnxruntime），约 3-8 秒/页，能接受
+- **重排版书**：marker/docling 在 CPU 上很慢，建议只对真正必需的书启用
+
+### A 卡（AMD）/ Intel 核显
+
+Windows 上 **ROCm 基本不可用**（官方只支持 Linux），所以现实路线是这三条：
+
+| 路线 | 怎么做喵 | 适用 |
+|---|---|---|
+| **OCR 吃 GPU** | `pip uninstall -y onnxruntime` → `pip install onnxruntime-directml`（DirectML 后端在 Windows 上支持 AMD / Intel / NVIDIA 显卡，rapidocr 检测到就会用） | 扫描书 OCR 提速最省事 |
+| **重排版解析** | Windows 下 marker/docling 老实走 CPU；真想用 ROCm 就把**整套部署到 Linux**（本项目 worker 按 Windows 解释器路径调用，不能只把解析 venv 塞进 WSL 里） | 有大量重解析需求 |
+| **云端/换机** | 只在有 N 卡或云 GPU 的机器上跑解析，把 `anchors/blocks` 数据带回来继续用 | 临时加速 |
+
+> Intel Arc / 核显：`onnxruntime-directml` 同样可用；torch XPU（intel-extension-for-pytorch）兼容性没验证过，不建议折腾喵。
+
+### 一条命令看清现在用的是哪种
+
+```bash
+python scripts/env_report.py
+```
+
+会列出：Python 与依赖版本、解析器 venv 是否就绪、CUDA 可用性与设备名、ONNX 执行后端，并顺手做一遍密钥安全检查（见下一节喵）。
+
+---
+
 ## 接入大模型
 
 去 **设置 → 供应商与模型** 添加（或手改 `data/models.json`）：
@@ -437,6 +504,37 @@ python cli.py eval <doc_id>               # 生成质量评测（三维度 + 基
 | 导出的 .tex 编译不了 | tex 恒为 UTF-8；请用 `xelatex`，并保证 `ctex` 宏包可用 |
 | 两个窗口同时改同一块 | 后手会收到 409（乐观锁），刷新重试就好 |
 | 端口被占用 | `启动自动笔记软件.bat 9000` 换个端口喵 |
+
+---
+
+## 密钥与隐私（不会进仓库喵）
+
+star喵放心，**你的 API Key 不在仓库里**：`.gitignore` 第 2 行就是 `data/`，而密钥住在 `data/models.json`、本地访问令牌住在 `data/.local_token`——这两个都被忽略了。
+
+本文档写作时的实测核查结果：
+
+| 检查项 | 结果 |
+|---|---|
+| `data/models.json`（含密钥） | ✅ 已忽略，且**从未进入任何提交** |
+| `data/.local_token`（本地令牌） | ✅ 已忽略，且从未进入任何提交 |
+| `config.yaml`（会被提交） | ✅ 不含密钥，只有路由/模板/解析器设置 |
+| 仓库里像密钥的字符串 | 仅测试夹具里的**假 key**（`sk-NEW-KEY-...`，用来验证掩码逻辑） |
+
+自己随时验一遍（`python scripts/env_report.py` 里也内置了同一套检查喵）：
+
+```bash
+git check-ignore -v data/models.json data/.local_token    # 应回显 .gitignore:2:data/
+git log --all --name-only --pretty=format: | Sort-Object -Unique | Select-String "models.json"
+#  ↑ 应为空：历史里从未出现过密钥文件
+```
+
+**推荐做法喵**：
+
+- 优先用 **`api_key_env`**（环境变量，密钥不落盘）：`data/models.json` 里写 `"api_key_env": "DEEPSEEK_API_KEY"`
+- 一定要写明文时，只写进 `data/models.json`（已忽略）；**不要**图省事塞进 `config.yaml`
+- 界面只回显末 4 位；把掩码原样回传**不会**覆盖真密钥（这是专门测过的行为）
+
+> **万一真提交过密钥**：先去供应商后台**吊销并换新**——这才是止损动作；然后才谈清理历史（`git filter-repo` 或 BFG）。历史清理不能撤回一个已经泄露的 key，喵呜。
 
 ---
 
