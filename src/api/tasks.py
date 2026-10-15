@@ -60,6 +60,10 @@ class TaskManager:
             self.runtime.update_task(task_id, status="cancelled", error={"message": str(exc)})
         except Exception as exc:  # 任务失败必须可解释（10.4）
             self.runtime.update_task(task_id, status="failed", error={"message": str(exc)})
+        finally:
+            # 线程对象不必长留内存（任务记录才是事实源；resume 会重新登记）
+            with self._lock:
+                self._threads.pop(task_id, None)
 
     def get(self, task_id: str) -> dict:
         return self.runtime.get_task(task_id)
@@ -96,14 +100,10 @@ class TaskManager:
             self.runtime.update_task(task_id, status="cancelled")
         with self._lock:
             self._threads.pop(task_id, None)
-            # 产物文件也是副本：一并删除，不留残余
+            # 只清映射，**不删文件**：产物就是导出交付物（notes_out/<doc>/…），
+            # 用户在任务托盘清理记录不该把刚导出的笔记一起删掉（曾如此，且无提示）
             for key in [k for k in list(self._artifacts) if k.startswith(task_id + ":")]:
-                path = self._artifacts.pop(key, None)
-                try:
-                    if path is not None:
-                        Path(path).unlink(missing_ok=True)
-                except OSError:
-                    pass
+                self._artifacts.pop(key, None)
         return self.runtime.delete_task(task_id)
 
     def artifact(self, task_id: str, name: str) -> Path:

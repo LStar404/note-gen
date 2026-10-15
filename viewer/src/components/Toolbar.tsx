@@ -812,11 +812,11 @@ export default function Toolbar() {
                 {!["queued", "running"].includes(t.status) && (
                   <button
                     className="danger"
-                    title="彻底删除该记录（不保留副本）"
+                    title="只删除这条任务记录；已导出的文件留在 notes_out/ 下，不会被删"
                     onClick={() =>
                       void api.deleteTask(t.task_id).then(() => {
                         setTasks((list) => list.filter((x) => x.task_id !== t.task_id));
-                        setToast("已彻底删除任务记录 " + t.task_id);
+                        setToast("已删除任务记录（导出文件仍保留在 notes_out/ 下）");
                       })
                     }
                   >
