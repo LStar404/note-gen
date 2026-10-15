@@ -504,6 +504,8 @@ python cli.py eval <doc_id>               # 生成质量评测（三维度 + 基
 | 导出的 .tex 编译不了 | tex 恒为 UTF-8；请用 `xelatex`，并保证 `ctex` 宏包可用 |
 | 两个窗口同时改同一块 | 后手会收到 409（乐观锁），刷新重试就好 |
 | 端口被占用 | `启动自动笔记软件.bat 9000` 换个端口喵 |
+| 重启电脑后打不开页面 | 服务**不会开机自启**（实测重启后 8787 无监听、零调用）：双击 `启动自动笔记软件.bat` 即可；想省事就把它的快捷方式丢进 `shell:startup`（Win+R 输入 `shell:startup`） |
+| 「点来源跳转」变慢 | 大概率是锚点→文档映射被清空（历史 bug，已修）：跑 `python cli.py reindex <doc_id>` 恢复；`python scripts/integrity_report.py` 会报「⚠️ 锚点映射缺失」 |
 
 ---
 

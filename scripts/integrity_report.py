@@ -68,6 +68,22 @@ def find_best_quote(anchor_content: str, old_quote: str, *, max_len: int = 80) -
     return content[start:end].strip()[:max_len]
 
 
+def _doc_map_ok(layout: Layout, doc: DocStore) -> bool:
+    """doc_map 里该书的锚点映射是否还在。
+
+    块编辑快路径曾把锚点映射整片删掉（实测 4 本书），此后锚点查询退化为遍历
+    所有书的锚点文件——正确但慢。修复：cli.py reindex <doc_id>。"""
+    try:
+        from src.db.runtime import get_runtime
+
+        anchors = doc.all_anchor_rows()
+        if not anchors:
+            return True
+        return get_runtime(layout.runtime_db).lookup_doc("anchor", anchors[0]["anchor_id"]) == doc.doc_id
+    except Exception:
+        return True
+
+
 def scan_doc(doc: DocStore, *, verbose: bool = False) -> dict:
     """返回一本书的完整性统计与问题清单。"""
     anchors = doc.all_anchor_rows()
@@ -192,7 +208,8 @@ def main() -> int:
         total_missing += len(st["missing"])
         print(f"{doc_id}  锚点 {st['anchors']:>5}  历史遗留 ID {st['stale_ids']:>5}"
               f"  缺引用 {len(st['missing']):>3}  引文不符 {len(st['bad_quotes']):>3}"
-              f"  源文本乱码 {len(st['garbled']):>3}")
+              f"  源文本乱码 {len(st['garbled']):>3}"
+              + ("  ⚠️ 锚点映射缺失" if not _doc_map_ok(layout, doc) else ""))
         for b, aid in st["missing"][:3]:
             print(f"    ❌ 来源指向不存在的锚点：{b} -> {aid}")
         for b, aid, cand in st["garbled"][:3]:

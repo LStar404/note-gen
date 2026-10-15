@@ -275,14 +275,23 @@ class RuntimeDB:
             return cur.rowcount
 
     # ---- 点查映射（block_id/anchor_id -> doc_id）----
-    def sync_doc_map(self, doc_id: str, block_ids: list[str], anchor_ids: list[str]) -> None:
-        """随 reindex 同步；同一 doc 的键全量替换，避免残留。"""
+    def sync_doc_map(self, doc_id: str, block_ids: list[str],
+                     anchor_ids: list[str] | None = None) -> None:
+        """随 reindex 同步同一 doc 的键（全量替换，避免残留）。
+
+        anchor_ids=None 表示「锚点未变，保留原映射」——块编辑快路径（blocks_only）
+        此前传空列表，把该 doc 的锚点映射整片删掉：锚点端点虽有空扫描兜底，
+        但此后每次查锚点都要遍历所有书的锚点文件（实测 4 本书映射为 0）。"""
         with self._lock, self._conn:
-            self._conn.execute("DELETE FROM doc_map WHERE doc_id=?", (doc_id,))
+            kinds = ("block",) if anchor_ids is None else ("block", "anchor")
+            self._conn.execute(
+                "DELETE FROM doc_map WHERE doc_id=? AND kind IN (%s)"
+                % ",".join("?" * len(kinds)), (doc_id, *kinds))
+            rows = [("block", b, doc_id) for b in block_ids]
+            if anchor_ids is not None:
+                rows += [("anchor", a, doc_id) for a in anchor_ids]
             self._conn.executemany(
-                "INSERT OR REPLACE INTO doc_map(kind,key,doc_id) VALUES(?,?,?)",
-                [("block", b, doc_id) for b in block_ids] +
-                [("anchor", a, doc_id) for a in anchor_ids])
+                "INSERT OR REPLACE INTO doc_map(kind,key,doc_id) VALUES(?,?,?)", rows)
 
     def lookup_doc(self, kind: str, key: str) -> str | None:
         with self._lock:

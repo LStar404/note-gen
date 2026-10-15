@@ -145,7 +145,9 @@ def reindex_doc(layout: Layout, doc_id: str, vec_dim: int | None = None,
                 get_runtime(layout.runtime_db).sync_doc_map(
                     doc_id,
                     [b["id"] for b in store.all_block_rows(include_deleted=True)],
-                    [a["anchor_id"] for a in anchors])
+                    # 快路径不扫锚点：传 None 表示「锚点未变，保留原映射」，
+                    # 传空列表会把该书的锚点映射整片删掉（曾让 4 本书映射为 0）
+                    None if blocks_only else [a["anchor_id"] for a in anchors])
             except Exception:
                 pass
 
