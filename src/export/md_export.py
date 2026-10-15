@@ -21,14 +21,20 @@ def _registry_path(out_dir: Path) -> Path:
 
 
 def _safe_write(out_dir: Path, rel: str, content: str, encoding: str = "utf-8") -> Path:
-    """导出通用规则 1：仅覆盖登记 hash 一致的文件；人工改动生成副本并提示。"""
+    """导出通用规则 1：仅覆盖登记 hash 一致的文件；人工改动生成副本并提示。
+
+    文本导出走这里；二进制（如 Anki .apkg）走 _safe_write_bytes，规则完全一致。"""
+    # 导出编码（export.encoding）：utf-8 / utf-8-sig / gbk / big5
+    # hash 必须按落盘字节计算，否则非 UTF-8 导出会被误判为“人工改动”
+    return _safe_write_bytes(out_dir, rel, content.encode(encoding, errors="replace"))
+
+
+def _safe_write_bytes(out_dir: Path, rel: str, data: bytes) -> Path:
+    """二进制版导出守护：登记 hash 一致才覆盖，否则落副本（Anki .apkg 也用）。"""
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / rel
     registry_path = _registry_path(out_dir)
     registry = json.loads(registry_path.read_text(encoding="utf-8")) if registry_path.exists() else {}
-    # 导出编码（export.encoding）：utf-8 / utf-8-sig / gbk / big5
-    # hash 必须按落盘字节计算，否则非 UTF-8 导出会被误判为“人工改动”
-    data = content.encode(encoding, errors="replace")
     new_hash = hashlib.sha256(data).hexdigest()
     if path.exists():
         cur_hash = hashlib.sha256(path.read_bytes()).hexdigest()

@@ -9,7 +9,10 @@ from __future__ import annotations
 import csv
 import hashlib
 import html
+import io
+import os
 import re
+import tempfile
 from pathlib import Path
 
 from src.core.store import DocStore
@@ -178,20 +181,31 @@ def export_anki(store: DocStore, chapter_id: str | None = None, *, out_dir: Path
             guid=genanki.guid_for(store.doc_id, card["block_id"]),
         )
         deck.add_note(note)
-    out = out_dir / f"{store.doc_id}{suffix}.apkg"
-    genanki.Package(deck).write_to_file(str(out))
-    return out
+    # 先写临时文件再走导出守护：用户改过同名 .apkg 时落 .exported 副本，不静默覆盖
+    from src.export.md_export import _safe_write_bytes
+
+    fd, tmp = tempfile.mkstemp(prefix="ng-anki-", suffix=".apkg")
+    os.close(fd)
+    try:
+        genanki.Package(deck).write_to_file(tmp)
+        return _safe_write_bytes(out_dir, f"{store.doc_id}{suffix}.apkg", Path(tmp).read_bytes())
+    finally:
+        Path(tmp).unlink(missing_ok=True)
 
 
 def _export_csv(store: DocStore, cards: list[dict], out_dir: Path, suffix: str,
                 encoding: str = "utf-8") -> Path:
-    """genanki 不可用时的回退：可导入 CSV（front,back,tags）。"""
-    out = out_dir / f"{store.doc_id}{suffix}-anki.csv"
-    with out.open("w", encoding=encoding, errors="replace", newline="") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(["front", "back", "tags", "source"])
-        for card in cards:
-            writer.writerow([card["front"], card["back_text"],
-                             ";".join(card["tags"]),
-                             "、".join(f"p.{p}" for p in card["pages"])])
-    return out
+    """genanki 不可用时的回退：可导入 CSV（front,back,tags）。
+
+    同样走导出守护（此前直接 open("w") 覆盖，手改过的 CSV 会被静默盖掉）。"""
+    from src.export.md_export import _safe_write
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["front", "back", "tags", "source"])
+    for card in cards:
+        writer.writerow([card["front"], card["back_text"],
+                         ";".join(card["tags"]),
+                         "、".join(f"p.{p}" for p in card["pages"])])
+    return _safe_write(out_dir, f"{store.doc_id}{suffix}-anki.csv", buf.getvalue(),
+                       encoding=encoding)
