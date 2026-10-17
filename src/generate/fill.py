@@ -118,7 +118,7 @@ def fill_one(client: LLMClient, *, doc_id: str, chapter_id: str, spec: dict,
             payload = parse_json_output(resp.get("output") if resp.get("output") is not None
                                         else resp.get("raw_text", ""))
             validate_fill_payload(payload, allowed_anchor_ids=set(source_ids),
-                                  anchors_by_id=anchors_by_id, spec=spec)
+                                  anchors_by_id=anchors_by_id, spec=spec, attempt=attempt)
             ok, latex_warnings = check_latex(payload.get("content", ""))
             if not ok:
                 if attempt < 1:

@@ -116,7 +116,7 @@ def _check_dag(items: list[dict]) -> None:
 
 def validate_fill_payload(payload: dict, *, allowed_anchor_ids: set[str],
                           anchors_by_id: dict[str, dict], spec: dict,
-                          check_quotes: bool = True) -> dict:
+                          check_quotes: bool = True, attempt: int = 0) -> dict:
     if not isinstance(payload, dict):
         raise SchemaViolation("fill 输出不是对象")
     # 控制字符净化（入库闸门，见 core.text.sanitize_control_chars）：
@@ -149,6 +149,7 @@ def validate_fill_payload(payload: dict, *, allowed_anchor_ids: set[str],
     sources = payload["sources_patch"]
     if not isinstance(sources, list):
         raise SchemaViolation("sources_patch 必须是数组")
+    unfixable: list[dict] = []
     for src in sources:
         if not isinstance(src, dict):
             raise SchemaViolation("sources_patch 元素必须是对象")
@@ -173,8 +174,23 @@ def validate_fill_payload(payload: dict, *, allowed_anchor_ids: set[str],
                     if hit is not None:
                         src["anchor_id"], fixed = hit
                 if fixed is None:
+                    # 重试到末期仍吸附不了（扫描书 OCR 乱码时模型无法逐字照抄）：
+                    # 只要还有其他可用来源，就丢掉这条来源把整块救回来并转待审核——
+                    # 否则一个引文毁掉整个知识点（线性代数 ch02-05 曾因此 partial）。
+                    # 不伪造引文：绝不把弱匹配写进 quote，宁可不引用。
+                    if attempt >= 2 and len(sources) > 1:
+                        unfixable.append(src)
+                        continue
                     raise SchemaViolation(f"quote 不匹配锚点原文: {src['anchor_id']}")
                 src["quote"] = fixed
+    if unfixable:
+        kept = [s for s in sources if not any(s is bad for bad in unfixable)]
+        if not kept:
+            raise SchemaViolation(f"quote 不匹配锚点原文: {unfixable[0]['anchor_id']}")
+        sources = kept
+        payload.setdefault("_warnings", []).append(
+            f"已移除 {len(unfixable)} 条无法定位原文的来源（余 {len(kept)} 条），整块转待审核")
+        payload["status"] = "needs_review"
     # 4.6.1 归一：同一 anchor_id 在一块内不得重复、sources ≤ 5。模型偶发重复/超量时
     # 就地去重截断（保留首次出现），否则要到 commit 才被 NoteBlock 校验拦下，整个章节失败。
     dedup: list[dict] = []

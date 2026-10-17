@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import re
 import secrets
@@ -41,6 +42,40 @@ def estimate_tokens(s: str) -> int:
     cjk = sum(1 for ch in s if "\u4e00" <= ch <= "\u9fff" or "\u3000" <= ch <= "\u303f")
     other = len(s) - cjk
     return cjk + (other + 3) // 4
+
+
+def best_verbatim_quote(anchor_content: str, quote: str, *, max_len: int = 300,
+                        min_len: int = 8) -> str:
+    """在锚点原文里找出与给定引文最接近的**逐字片段**（连续子串）。
+
+    扫描书的锚点原文是 OCR 文本，模型很难「逐字照抄」——它常改写/补标点/加省略号，
+    于是 quote 校验失败、重试 4 次仍失败、整块判失败（线性代数 ch02-05 因此 partial）。
+    用最长公共匹配定位原文中对应的那段，返回可校验的真实片段；找不到够长的匹配返回空串。
+
+    返回值一定是 anchor_content 的连续子串（quote_matches 必过，见 core.models）。"""
+    content = anchor_content or ""
+    old = (quote or "").strip()
+    if not content:
+        return ""
+    if old and quote_matches_local(content, old):
+        return old[:max_len]
+    sm = difflib.SequenceMatcher(None, old or content[:max_len], content, autojunk=False)
+    match = sm.find_longest_match(0, len(old or content[:max_len]), 0, len(content))
+    if match.size < min_len:
+        return ""
+    start, end = match.b, match.b + match.size
+    # 向两侧扩到词/句边界，读起来完整（仍保持「原文连续片段」的性质）
+    while start > 0 and content[start - 1] not in " \n\t。！？.;；：:，,":
+        start -= 1
+    while end < len(content) and content[end] not in " \n\t。！？.;；：:，,":
+        end += 1
+    return content[start:end].strip()[:max_len]
+
+
+def quote_matches_local(anchor_content: str, quote: str) -> bool:
+    """与 core.models.quote_matches 同规则（避免 text→models 的循环导入）。"""
+    q = normalize_text(quote)
+    return bool(q) and q in normalize_text(anchor_content)
 
 
 def doc_namespace(doc_id: str) -> str:
