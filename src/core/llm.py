@@ -264,9 +264,10 @@ class BudgetGuard:
         self._lock = threading.Lock()
         self._reserved = 0.0
 
-    def reserve(self, cost_estimate: float | None) -> None:
+    def reserve(self, cost_estimate: float | None) -> float | None:
+        """调用前预留最坏成本，返回预留额（供 settle 结算）；预算未启用返回 None。"""
         if self.limit <= 0:
-            return
+            return None
         if cost_estimate is None:
             raise PriceUnknown("成本未知，无法在非零预算下调用")
         with self._lock:
@@ -277,9 +278,19 @@ class BudgetGuard:
                                    code="BUDGET_EXCEEDED",
                                    detail={"limit": self.limit, "reserved": self._reserved})
             self._reserved += cost_estimate
+            return cost_estimate
 
-    def settle(self, cost_estimate: float | None, reserved: float | None) -> None:
-        pass  # 预留额即已用额：超预算停止新调用（不回滚已发生成本）
+    def settle(self, cost_actual: float | None, reserved: float | None) -> None:
+        """预留额结算成实际花费（失败/重试用尽则退回预留）。
+
+        原实现「预留即已用、永不结算」：每次调用按 输入估算 + **整个 max_tokens** 的
+        成本永久计入，而实际输出常只有其几分之一 → 打开成本上限后，账被放大数倍，
+        远没花到上限就先 BUDGET_EXCEEDED 中断（configured 0.2 美元、实际花 0.05 就停）。
+        结算后：在途调用仍按最坏成本预留（并发不超上限），已完成的按实际花费记账。"""
+        if self.limit <= 0 or not reserved:
+            return
+        with self._lock:
+            self._reserved = max(0.0, self._reserved - float(reserved) + float(cost_actual or 0.0))
 
 
 class LLMClient:
@@ -393,8 +404,7 @@ class LLMClient:
         est_in = sum(estimate_tokens(str(m.get("content", ""))) for m in messages)
         est_out = max_tokens
         reserved_cost = self.registry.estimate_cost(model_name, est_in, est_out)
-        if budget:
-            budget.reserve(reserved_cost)
+        reserved = budget.reserve(reserved_cost) if budget else None
 
         attempts = 0
         while True:
@@ -431,12 +441,17 @@ class LLMClient:
                     tokens_in=est_in, tokens_out=None, cost_est=None,
                     success=False, estimated=True, task_id=task_id)
                 if attempts >= 3:
+                    # 重试用尽：退回预留额（本次调用没成功，不该永久计入预算）
+                    if budget:
+                        budget.settle(None, reserved)
                     raise
                 # 退避 2s/4s（曾 1s/2s 太急：限流窗口没过就又撞回去，实测 29 连败）
                 time.sleep(min(8.0, 2.0 * attempts))
                 continue
             except NoteGenError as exc:
                 # 不可重试错误（鉴权/参数/模型不存在）：只记一次失败，立即上抛
+                if budget:
+                    budget.settle(None, reserved)      # 退回预留额
                 if isinstance(exc, QuotaExhausted):
                     self.halted_reason = exc.message
                 self.runtime.log_usage(
@@ -454,6 +469,9 @@ class LLMClient:
                 self.stats["tokens_in"] += tin
                 self.stats["tokens_out"] += tout
             cost = self.registry.estimate_cost(model_name, tin, tout)
+            if budget:
+                # 结算：把最坏预留换成实际花费（在途并发仍按预留额控上限）
+                budget.settle(cost, reserved)
             self.runtime.log_usage(
                 provider_id=provider_cfg["id"], model=model_name, task=task,
                 request_id=result.get("request_id") or request_id, doc_id=doc_id,
