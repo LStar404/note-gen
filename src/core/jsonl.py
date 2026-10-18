@@ -64,14 +64,6 @@ def dump_line(obj: Any) -> str:
     return _dumps(obj).decode("utf-8")
 
 
-def _fsync_file(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
 def atomic_write_bytes(path: str | Path, data: bytes, *, fsync: bool = True) -> None:
     """整文件原子替换：同目录临时文件 + fsync + os.replace（Windows 同卷）。
 
@@ -93,10 +85,10 @@ def atomic_write_bytes(path: str | Path, data: bytes, *, fsync: bool = True) -> 
         raise
     if not fsync:
         return
-    try:
-        _fsync_file(path)
-    except OSError:
-        pass
+    # 注意：os.replace 之后**不再**对目标文件 fsync——数据已在临时文件句柄上 fsync 过
+    # （上面的 flush + os.fsync），替换只改目录项；重复刷同一个 inode 纯属浪费
+    # （NTFS 每次 fsync 约 10ms，单次块编辑 8 个文件 ≈ 160ms）。
+    # 落盘顺序仍是 POSIX 推荐三步：写临时并 fsync → rename → fsync 目录。
     _fsync_dir(path.parent)
 
 

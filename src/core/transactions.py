@@ -231,7 +231,11 @@ def _finish_index_and_cleanup(layout: Layout, doc_id: str, tx_dir: Path,
 
         blocks_only = bool(changed) and all(
             (not c.startswith("anchors/")) for c in changed)
-        reindex_doc(layout, doc_id, blocks_only=blocks_only)
+        # 只重刷变更到的章（块编辑只影响本章）：从 blocks/chXX.jsonl 解析章 id
+        chapters = sorted({c.split("/")[1][:-len(".jsonl")] for c in (changed or [])
+                           if c.startswith("blocks/") and c.endswith(".jsonl")})
+        reindex_doc(layout, doc_id, blocks_only=blocks_only,
+                    chapters=chapters if blocks_only else None)
     except Exception:
         return  # 索引滞后属正常，保留日志待下次恢复
     shutil.rmtree(tx_dir, ignore_errors=True)

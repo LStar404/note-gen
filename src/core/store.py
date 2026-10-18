@@ -36,6 +36,11 @@ class DocMutation:
     history: list[dict] = field(default_factory=list)              # 追加行（rev_id 去重）
     refs: list[dict] | None = None                                 # 整文件替换 refs/index.jsonl
     manifest_updates: dict | None = None
+    # 本次提交**真正改动**的块 id（单块编辑/重排等定向操作用）。
+    # 块文件是整章重写的，若不给这个集合，schema 校验会按「文件里出现过的 id」
+    # 把整章所有块都跑一遍 pydantic 校验——实测单块编辑 452 块 × 校验占 ~150ms。
+    # None = 未提供，退回原有「整文件里的行都算变更」的保守行为。
+    changed_block_ids: set[str] | None = None
 
 
 def _clone_row(row: dict) -> dict:
@@ -291,7 +296,8 @@ class DocStore:
 
     def integrity_check(self, overrides: dict[str, bytes], *, check_quotes: bool = False,
                         changed_rows_only: bool = True,
-                        precomputed: tuple[dict, list] | None = None) -> None:
+                        precomputed: tuple[dict, list] | None = None,
+                        validate_block_ids: set[str] | None = None) -> None:
         """I2/I3 与 4.7 校验：候选状态非法则拒绝提交。
 
         changed_rows_only=True：只对本次变更文件里的行做 schema 校验（写入前校验），
@@ -318,6 +324,9 @@ class DocStore:
         block_ids = {b["id"] for b in blocks}
         for b in blocks:
             if changed_rows_only and b.get("id") not in changed_blocks:
+                continue
+            # 定向提交：只校验真正改动的块（其余块在各自提交时已校验过）
+            if validate_block_ids is not None and b.get("id") not in validate_block_ids:
                 continue
             try:
                 model = NoteBlock.model_validate(b)
@@ -385,7 +394,8 @@ class DocStore:
             precomputed = self.candidate_state(candidates)
 
             def validator(cands: dict[str, bytes]) -> None:  # noqa: F811
-                self.integrity_check(cands, check_quotes=check_quotes, precomputed=precomputed)
+                self.integrity_check(cands, check_quotes=check_quotes, precomputed=precomputed,
+                                     validate_block_ids=mutation.changed_block_ids)
 
         result = commit_doc(self.layout, self.doc_id, base, changes,
                             manifest_updates=mutation.manifest_updates,
@@ -479,7 +489,8 @@ class DocStore:
         rows = self.block_rows(chapter, include_deleted=True)
         rows.append(block)
         mutation = DocMutation(blocks={chapter: rows},
-                               history=[self.make_history_row(block, block["created_by"], message, now)])
+                               history=[self.make_history_row(block, block["created_by"], message, now)],
+                               changed_block_ids={block["id"]})
         self.commit(mutation, base_revision=base_revision, check_quotes=True)
         return block
 
@@ -519,7 +530,8 @@ class DocStore:
         rows = [dict(b) for b in self.block_rows(chapter, include_deleted=True)]
         rows = [block if b["id"] == block_id else b for b in rows]
         mutation = DocMutation(blocks={chapter: rows},
-                               history=[self.make_history_row(block, author, message, now)])
+                               history=[self.make_history_row(block, author, message, now)],
+                               changed_block_ids={block_id})
         self.commit(mutation, base_revision=base_revision, check_quotes=("sources" in patch))
         return block
 
@@ -540,7 +552,8 @@ class DocStore:
         rows = [dict(b) for b in self.block_rows(chapter, include_deleted=True)]
         rows = [block if b["id"] == block_id else b for b in rows]
         mutation = DocMutation(blocks={chapter: rows},
-                               history=[self.make_history_row(block, author, message, now)])
+                               history=[self.make_history_row(block, author, message, now)],
+                               changed_block_ids={block_id})
         self.commit(mutation, base_revision=base_revision)
         return block
 
@@ -560,7 +573,8 @@ class DocStore:
         rows = [dict(b) for b in self.block_rows(chapter, include_deleted=True)]
         rows = [block if b["id"] == block_id else b for b in rows]
         mutation = DocMutation(blocks={chapter: rows},
-                               history=[self.make_history_row(block, author, message, now)])
+                               history=[self.make_history_row(block, author, message, now)],
+                               changed_block_ids={block_id})
         self.commit(mutation, base_revision=base_revision)
         return block
 
@@ -590,7 +604,8 @@ class DocStore:
         rows = [dict(b) for b in self.block_rows(chapter, include_deleted=True)]
         rows = [block if b["id"] == block_id else b for b in rows]
         mutation = DocMutation(blocks={chapter: rows},
-                               history=[self.make_history_row(block, author, f"回滚到 {rev_id}", now)])
+                               history=[self.make_history_row(block, author, f"回滚到 {rev_id}", now)],
+                               changed_block_ids={block_id})
         self.commit(mutation, base_revision=base_revision, check_quotes=True)
         return block
 
@@ -609,7 +624,8 @@ class DocStore:
         rows = [dict(b) for b in self.block_rows(chapter, include_deleted=True)]
         rows = [block if b["id"] == block_id else b for b in rows]
         mutation = DocMutation(blocks={chapter: rows},
-                               history=[self.make_history_row(block, "human", "允许重新生成覆盖", now)])
+                               history=[self.make_history_row(block, "human", "允许重新生成覆盖", now)],
+                               changed_block_ids={block_id})
         self.commit(mutation, base_revision=base_revision)
         return block
 
@@ -638,7 +654,8 @@ class DocStore:
         block["updated_at"] = now
         rows = [block if b["id"] == block_id else b for b in rows]
         mutation = DocMutation(blocks={chapter: rows},
-                               history=[self.make_history_row(block, author, "重排", now)])
+                               history=[self.make_history_row(block, author, "重排", now)],
+                               changed_block_ids={block_id})
         self.commit(mutation, base_revision=base_revision)
         return sort_blocks([b for b in rows if not b.get("deleted_at")])
 

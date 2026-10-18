@@ -275,6 +275,21 @@ class RuntimeDB:
             return cur.rowcount
 
     # ---- 点查映射（block_id/anchor_id -> doc_id）----
+    def sync_doc_map_ids(self, doc_id: str, *, remove_block_ids=(), block_ids=()) -> None:
+        """定向同步块映射（块编辑快路径）：只摘掉本章旧块、挂上本章新块。
+
+        不重写全书映射——1858 块 + 3541 锚点的全量替换在每次编辑里都是纯浪费
+        （块永远不跨章，按章定向即可保持映射正确）。"""
+        with self._lock, self._conn:
+            if remove_block_ids:
+                self._conn.executemany(
+                    "DELETE FROM doc_map WHERE kind='block' AND key=?",
+                    [(k,) for k in remove_block_ids])
+            if block_ids:
+                self._conn.executemany(
+                    "INSERT OR REPLACE INTO doc_map(kind,key,doc_id) VALUES('block',?,?)",
+                    [(k, doc_id) for k in block_ids])
+
     def sync_doc_map(self, doc_id: str, block_ids: list[str],
                      anchor_ids: list[str] | None = None) -> None:
         """随 reindex 同步同一 doc 的键（全量替换，避免残留）。

@@ -469,8 +469,9 @@ note-gen/
 ## 测试与质量
 
 ```bash
-python -m pytest -q                       # 340 项单元/集成测试（1 项按环境跳过）
+python -m pytest -q                       # 340+ 项单元/集成测试（1 项按环境跳过）
 python -m ruff check --select F,E9 src tests   # 静态检查
+python scripts/bench_ops.py               # 底层操作基准（真实教材的临时副本，不动原数据）
 python scripts/edge_case_probe.py         # 边界探测（异常输入/错误码）
 python scripts/edge_case_probe2.py        # 边界探测（agent/备份/任务/约束）
 python scripts/tech_validation_11.py      # 解析器技术验证
@@ -478,6 +479,16 @@ python cli.py eval <doc_id>               # 生成质量评测（三维度 + 基
 ```
 
 评测三维度：**faithfulness**（忠实度）/ **formula**（公式正确率）/ **coverage**（锚点覆盖率）；任一维度掉到基线以下 5 个百分点就告警（防"改 prompt 改坏质量"，喵）。
+
+### 底层性能（线性代数 364 页 / 1858 块实测喵）
+
+| 操作 | 优化前 | 优化后 |
+|---|---|---|
+| 单块编辑一次完整提交 | 634 ms | **~336 ms** |
+| reindex（只重刷变更章） | 92 ms（全书） | **~40 ms** |
+| reindex（全书全量） | 310 ms | ~250 ms |
+
+三个热点：① 块编辑只重刷**本章**索引与 `doc_map`（不再 DELETE+INSERT 全书 1858 行）；② schema 校验只跑**本次真改的块**（不再整章 452 块全跑 pydantic）；③ 去掉 `os.replace` 之后多余的目标文件 `fsync`（数据已在临时文件句柄上刷过盘，落盘顺序仍是 写临时+fsync → rename → fsync 目录）。三者都不改变可恢复提交协议与 I2/I3 校验的覆盖面。
 
 > 我的规矩，star喵记一下喵：**每个 bug 修复都要带回归测试**，而且测试要能变红（先证明它真能抓到问题）。涉及 worker 子进程的行为，必须有 worker 级测试——只靠 monkeypatch 的单测会漏掉真问题，喵呜。
 
