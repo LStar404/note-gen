@@ -401,6 +401,7 @@ export default function SetupGuide() {
                               <option key={o.value} value={o.value}>
                                 {o.value}
                                 {s.id === "agent" && !o.tools ? "（缺 tools）" : ""}
+                                {s.id === "ocr" && !o.vision ? "（缺 vision）" : ""}
                               </option>
                             ))}
                           </select>
