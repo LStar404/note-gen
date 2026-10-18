@@ -39,7 +39,11 @@ STEP_DEFS: list[dict] = [
 ]
 
 SLOT_LABELS = {"default": "默认", "outline": "提纲", "fill": "填充",
-               "agent": "agent 编辑", "link": "链接"}
+               "agent": "agent 编辑", "link": "链接",
+               # 后端会读这两个槽位（ollama/视觉补 OCR 与出题），但向导此前不暴露 →
+               # 界面根本配不到：视觉补 OCR 永远走 fill/default 的视觉检测，
+               # 出题只能用 fill。补上才能让用户真正指定。
+               "ocr": "视觉补 OCR", "quiz": "出题"}
 
 
 def state(request: Request):

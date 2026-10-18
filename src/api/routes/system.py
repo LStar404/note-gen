@@ -58,10 +58,11 @@ def update_routes(request: Request, body: dict):
     for slot, name in (body or {}).items():
         if name:
             st.registry.find_model(name)   # 校验模型存在
-            if slot == "agent":
-                caps = st.registry.capabilities(name)
-                if not caps.get("tools"):
-                    raise InputError(f"模型 {name} 缺少 tools 能力，不能用于 agent 任务")
+            caps = st.registry.capabilities(name)
+            if slot == "agent" and not caps.get("tools"):
+                raise InputError(f"模型 {name} 缺少 tools 能力，不能用于 agent 任务")
+            if slot == "ocr" and not caps.get("vision"):
+                raise InputError(f"模型 {name} 缺少 vision 能力，不能用于视觉补 OCR")
     st.save_model_routes(body or {})
     st.invalidate_client()
     return {"routes": st.config.get("generate", {}).get("models", {})}

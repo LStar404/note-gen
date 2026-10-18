@@ -59,7 +59,9 @@ class AppState:
         cfg = dict(self.config)
         gen = dict(cfg.get("generate", {}))
         models = dict(gen.get("models", {}))
-        for slot in ("default", "outline", "fill", "agent", "link"):
+        # 槽位必须与后端真实消费的一致：default / outline / fill / agent / link / quiz / ocr
+        # （此前只认前 5 个，向导里配 ocr/quiz 会被静默丢掉）
+        for slot in ("default", "outline", "fill", "agent", "link", "quiz", "ocr"):
             if slot in routes:
                 models[slot] = routes[slot]
         gen["models"] = models
