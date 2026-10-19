@@ -138,6 +138,55 @@ export function buildPlainText(payload: SharePayload): string {
   return lines.join("\n").trimEnd() + "\n";
 }
 
+
+/** .ngshare 分享包：对方装了 note-gen 就能直接导入阅读（纯 JSON，图片内嵌）。 */
+export interface NgshareBlock {
+  type: string;
+  title: string;
+  content: string;
+  sources: ShareSource[];
+}
+
+export interface NgsharePayload {
+  format: "note-gen-share";
+  version: 1;
+  created_at: string;
+  title: string;
+  chapter_title: string;
+  blocks: NgshareBlock[];
+  figures: Record<string, string>;
+}
+
+export function buildNgshare(payload: SharePayload, chapterTitle: string): NgsharePayload {
+  return {
+    format: "note-gen-share",
+    version: 1,
+    created_at: new Date().toISOString(),
+    title: payload.title,
+    chapter_title: chapterTitle,
+    blocks: payload.blocks.map((b) => ({
+      type: b.type ?? "",
+      title: b.title ?? "",
+      content: b.content ?? "",
+      sources: (b.sources ?? []).map((s) => ({ page: s.page, quote: s.quote })),
+    })),
+    figures: payload.figures,
+  };
+}
+
+/** 只读渲染分享里的一个块：图占位符换成分享包内嵌的 data URL。 */
+export function renderSharedBlock(content: string, figures: Record<string, string>): string {
+  let html = renderMarkdown(content || "", "", {});
+  for (const [fid, dataUrl] of Object.entries(figures ?? {})) {
+    html = html.split('/figures/' + fid).join('/figures/' + fid); // 兼容不同拼法
+    html = html.split("/api/v1/docs//figures/" + fid).join(dataUrl);
+    if (html.includes(">") && !html.includes(dataUrl)) {
+      html = html.replace(new RegExp('src="[^"]*' + fid + '"'), 'src="' + dataUrl + '"');
+    }
+  }
+  return html;
+}
+
 export function downloadText(filename: string, content: string, mime: string): void {
   const blob = new Blob([content], { type: mime + ";charset=utf-8" });
   const url = URL.createObjectURL(blob);

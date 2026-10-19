@@ -1002,3 +1002,15 @@ html[data-motion="off"] *::after {
   border: 1px solid var(--border, #e5e7eb); border-radius: 8px; padding: 10px; }
 .share-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 6px; }
 .share-note { color: var(--muted, #6b7280); font-size: 13px; margin: 6px 0; }
+
+/* ---- 分享：标签页 / 收件箱 / 只读查看 ---- */
+.share-tabs { display: flex; gap: 6px; margin: 4px 0 12px; }
+.share-tabs button { background: transparent; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+.share-tabs button.active { background: var(--accent-weak, #eef2ff); border-color: var(--accent, #6366f1); color: var(--accent, #4f46e5); font-weight: 600; }
+.share-list { list-style: none; padding: 0; margin: 8px 0; max-height: 240px; overflow: auto; }
+.share-list li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border, #eef0f3); }
+.share-list li .link { flex: 1; text-align: left; background: none; border: 0; color: var(--accent, #4f46e5); cursor: pointer; padding: 0; font: inherit; }
+.share-view { border-top: 1px solid var(--border, #e5e7eb); margin-top: 12px; padding-top: 10px; max-height: 42vh; overflow: auto; }
+.share-view .blk { padding: 8px 0; border-bottom: 1px dashed var(--border, #eef0f3); }
+.share-view .blk h4 { margin: 0 0 6px; font-size: 15px; }
+.share-view .md img { max-width: 100%; }

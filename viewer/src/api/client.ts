@@ -130,6 +130,14 @@ export const api = {
   shareDoc: (docId: string, chapterId?: string | null) =>
     api.get<any>("/api/v1/docs/" + docId + "/share"
       + (chapterId ? "?chapter_id=" + encodeURIComponent(chapterId) : "")),
+  listShares: () => api.get<{ items: any[] }>("/api/v1/shares"),
+  getShare: (shareId: string) => api.get<any>("/api/v1/shares/" + encodeURIComponent(shareId)),
+  deleteShare: (shareId: string) => api.del<any>("/api/v1/shares/" + encodeURIComponent(shareId)),
+  uploadShare: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.post<{ share: any }>("/api/v1/shares", form);
+  },
   exportDoc: (body: any) => api.post<{ task_id: string }>("/api/v1/export", body),
   getTask: (taskId: string) => api.get<any>("/api/v1/tasks/" + taskId),
   cancelTask: (taskId: string) => api.post<any>("/api/v1/tasks/" + taskId + "/cancel"),
