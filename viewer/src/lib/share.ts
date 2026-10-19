@@ -174,15 +174,15 @@ export function buildNgshare(payload: SharePayload, chapterTitle: string): Ngsha
   };
 }
 
-/** 只读渲染分享里的一个块：图占位符换成分享包内嵌的 data URL。 */
+/** 只读渲染分享里的一个块：图占位符换成分享包内嵌的 data URL。
+ *
+ * 分享页 docId 为空 → 渲染器给出 `/api/v1/docs//figures/<fid>`；这里按 fid 把**所有**
+ * 出现的 src 都换成内嵌数据（一张图可能被正文引用多次，旧实现只换第一处）。 */
 export function renderSharedBlock(content: string, figures: Record<string, string>): string {
   let html = renderMarkdown(content || "", "", {});
   for (const [fid, dataUrl] of Object.entries(figures ?? {})) {
-    html = html.split('/figures/' + fid).join('/figures/' + fid); // 兼容不同拼法
-    html = html.split("/api/v1/docs//figures/" + fid).join(dataUrl);
-    if (html.includes(">") && !html.includes(dataUrl)) {
-      html = html.replace(new RegExp('src="[^"]*' + fid + '"'), 'src="' + dataUrl + '"');
-    }
+    html = html.replace(new RegExp('src="[^"]*' + fid + '"', "g"),
+                        'src="' + dataUrl + '"');
   }
   return html;
 }

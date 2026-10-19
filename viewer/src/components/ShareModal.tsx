@@ -49,6 +49,7 @@ export default function ShareModal({ onClose }: { onClose: () => void }) {
       .catch(() => setShares([]));
 
   useEffect(() => {
+    setViewing(null);                 // 切标签时清掉正在看的分享，避免残留旧内容
     if (tab === "inbox") loadShares();
   }, [tab]);
 

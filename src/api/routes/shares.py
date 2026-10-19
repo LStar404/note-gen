@@ -126,8 +126,13 @@ def validate_share(payload) -> dict:
 
 
 def share_id_for(payload: dict) -> str:
-    """按内容派生 id：同一个包重复导入是幂等的（不会堆出一堆副本）。"""
-    return "share-" + hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()[:12]
+    """按内容派生 id（**不含 created_at**）：同一份笔记重复导入/重新导出都幂等。
+
+    导出包每次都盖新的 created_at 时间戳——若把时间戳也算进 id，用户把同一章
+    重新导出一次就会在对方收件箱里多出一条副本（实测同内容 id 从 fef9db 变 7ded51）。"""
+    basis = {k: payload.get(k) for k in
+             ("format", "version", "title", "chapter_title", "blocks", "figures")}
+    return "share-" + hashlib.sha256(canonical_json(basis).encode("utf-8")).hexdigest()[:12]
 
 
 def _write_share(layout, payload: dict) -> dict:

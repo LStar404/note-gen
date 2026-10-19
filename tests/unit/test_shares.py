@@ -67,6 +67,10 @@ def test_upload_is_idempotent_by_content(workspace):
         a = _upload(client, h, PAYLOAD).json()["share"]["share_id"]
         b = _upload(client, h, PAYLOAD).json()["share"]["share_id"]
         assert a == b, "同一个包重复导入不应产生副本"
+        # 导出时间不同（同一份笔记重新导出）也必须是同一条：否则收件箱会堆副本
+        again = dict(PAYLOAD, created_at="2026-10-20T09:00:00Z")
+        c = _upload(client, h, again).json()["share"]["share_id"]
+        assert c == a, "内容相同、导出时间不同 → 仍应去重"
         assert len(client.get("/api/v1/shares", headers=h).json()["items"]) == 1
 
 
