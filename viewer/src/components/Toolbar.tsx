@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { useStore } from "../state/store";
+import ShareModal from "./ShareModal";
 
 // 任务进度可读化（9.2 进度透传）：提纲 2/6 批、填充 3/20、生成 ch01
 function progressText(p: any): string {
@@ -431,6 +432,8 @@ export default function Toolbar() {
   const [records, setRecords] = useState<any[] | null>(null);
   // 统一导出弹窗：所有导出共享一个入口，点进去选格式与范围
   const [exportOpen, setExportOpen] = useState(false);
+  // 分享：复制 Markdown / 下载离线单文件 HTML（公式字体与插图内嵌）
+  const [shareOpen, setShareOpen] = useState(false);
   const [expFormat, setExpFormat] = useState("md");
   const [expScope, setExpScope] = useState<"book" | "chapter">("book");
   // 导出完成提示：文件在哪 + 一键打开文件夹
@@ -676,6 +679,10 @@ export default function Toolbar() {
       <button className="primary" onClick={() => setExportOpen(true)}
               title="导出笔记：Markdown / LaTeX / Obsidian / Anki，可选整本或当前章节">
         导出
+      </button>
+      <button onClick={() => setShareOpen(true)}
+              title="分享：复制 Markdown 或下载单文件 HTML（公式字体与插图内嵌，离线可看）">
+        分享
       </button>
       <button onClick={() => void openQuiz()}
               title="AI 出题：按笔记出练习题（可上传往年题/课后习题定向风格，期末备考）">
@@ -1100,6 +1107,7 @@ export default function Toolbar() {
           </div>
         </div>
       )}
+      {shareOpen && <ShareModal onClose={() => setShareOpen(false)} />}
       {exportOpen && (
         <div className="modal-mask" onClick={() => setExportOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>

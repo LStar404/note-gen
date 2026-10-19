@@ -591,6 +591,64 @@ def generate_reports(request: Request, doc_id: str):
     return {"reports": out}
 
 
+@router.get("/api/v1/docs/{doc_id}/share")
+def share_doc(request: Request, doc_id: str, chapter_id: str | None = None):
+    """分享用载荷：与文件导出同一套 Markdown 渲染 + 结构化块（前端据此生成离线 HTML）。
+
+    chapter_id 省略 = 整本。图片以 data URL 内嵌，分享文件离线可看。
+    """
+    import base64
+    import re as _re
+
+    st = state(request)
+    store = DocStore(st.layout, doc_id)
+    manifest = store.manifest()
+    all_ch = [c["chapter_id"] for c in manifest.get("chapters", [])]
+    if chapter_id and chapter_id not in all_ch:
+        raise NotFound(f"章节不存在: {chapter_id}")
+    from src.export.md_export import render_md_book_text, render_md_chapter_text
+
+    if chapter_id:
+        filename, markdown = render_md_chapter_text(store, chapter_id)
+        chapters = [chapter_id]
+    else:
+        filename, markdown = render_md_book_text(store)
+        chapters = all_ch
+    anchors_by_id = {a["anchor_id"]: a for a in store.all_anchor_rows()}
+    blocks_out: list[dict] = []
+    fig_ids: set[str] = set()
+    for ch in chapters:
+        for b in store.block_rows(ch):
+            if b.get("deleted_at"):
+                continue
+            srcs = []
+            for s in b.get("sources") or []:
+                a = anchors_by_id.get(s.get("anchor_id"))
+                if a is None:
+                    continue
+                srcs.append({"page": a.get("page"),
+                             "quote": (s.get("quote") or "")[:200]})
+                if s.get("figure_id"):
+                    fig_ids.add(str(s["figure_id"]))
+            content = b.get("content") or ""
+            for m in _re.finditer(r"!\[(fig_[A-Za-z0-9_]+)\]", content):
+                fig_ids.add(m.group(1))
+            blocks_out.append({"id": b["id"], "type": b.get("type"),
+                               "title": b.get("title") or "",
+                               "content": content, "status": b.get("status"),
+                               "sources": srcs})
+    figures: dict[str, str] = {}
+    for fid in sorted(fig_ids):
+        p = st.layout.figure_png(doc_id, fid)
+        if p.exists():
+            figures[fid] = ("data:image/png;base64,"
+                            + base64.b64encode(p.read_bytes()).decode("ascii"))
+    return {"doc_id": doc_id, "title": manifest.get("title") or doc_id,
+            "filename": filename, "markdown": markdown,
+            "blocks": blocks_out, "figures": figures,
+            "generated_at": manifest.get("updated_at")}
+
+
 @router.get("/api/v1/docs/{doc_id}/pdf")
 def get_pdf(request: Request, doc_id: str):
     """PDF 静态服务：支持 HTTP Range（206/416）与完整 GET（200）。"""

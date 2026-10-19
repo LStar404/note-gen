@@ -80,9 +80,10 @@ def _block_lines(store: DocStore, blocks: list[dict], anchors_by_id: dict[str, d
     return lines
 
 
-def export_md_chapter(store: DocStore, chapter_id: str, *, out_dir: Path,
-                      lang: str = "zh", encoding: str = "utf-8") -> Path:
-    labels = labels_for(lang, encoding=encoding)
+def render_md_chapter_text(store: DocStore, chapter_id: str, *, lang: str = "zh") \
+        -> tuple[str, str]:
+    """渲染单章 Markdown，返回 (文件名, 正文)。分享与文件导出共用这一份逻辑。"""
+    labels = labels_for(lang, encoding="utf-8")
     manifest = store.manifest()
     chapter = store.chapter(chapter_id)
     anchors_by_id = {a["anchor_id"]: a for a in store.all_anchor_rows()}
@@ -96,13 +97,18 @@ def export_md_chapter(store: DocStore, chapter_id: str, *, out_dir: Path,
                                  block_count=len(blocks))
     body = "\n".join(_block_lines(store, blocks, anchors_by_id, figure_paths,
                                    figure_captions, refs_by_num, labels=labels))
-    return _safe_write(out_dir, f"{chapter_id}.md", head + "\n" + body + "\n", encoding=encoding)
+    return f"{chapter_id}.md", head + "\n" + body + "\n"
 
 
-def export_md_book(store: DocStore, *, out_dir: Path, lang: str = "zh",
-                   encoding: str = "utf-8") -> Path:
-    """整书导出 = 各章合并 + 目录页（由各章 h1 heading 锚点生成）+ 跨章 links 统一解析。"""
-    labels = labels_for(lang, encoding=encoding)
+def export_md_chapter(store: DocStore, chapter_id: str, *, out_dir: Path,
+                      lang: str = "zh", encoding: str = "utf-8") -> Path:
+    name, text = render_md_chapter_text(store, chapter_id, lang=lang)
+    return _safe_write(out_dir, name, text, encoding=encoding)
+
+
+def render_md_book_text(store: DocStore, *, lang: str = "zh") -> tuple[str, str]:
+    """整书 Markdown 渲染（分享/导出共用），返回 (文件名, 正文)。"""
+    labels = labels_for(lang, encoding="utf-8")
     manifest = store.manifest()
     anchors_by_id = {a["anchor_id"]: a for a in store.all_anchor_rows()}
     parts: list[str] = [f"# {manifest.get('title', store.doc_id)}", ""]
@@ -121,7 +127,14 @@ def export_md_book(store: DocStore, *, out_dir: Path, lang: str = "zh",
         blocks = live_blocks(store.block_rows(ch["chapter_id"]))
         parts.extend(_block_lines(store, blocks, anchors_by_id, figure_paths,
                                   figure_captions, refs_by_num, labels=labels))
-    return _safe_write(out_dir, "_book.md", "\n".join(parts) + "\n", encoding=encoding)
+    return "_book.md", "\n".join(parts) + "\n"
+
+
+def export_md_book(store: DocStore, *, out_dir: Path, lang: str = "zh",
+                   encoding: str = "utf-8") -> Path:
+    """整书导出 = 各章合并 + 目录页（由各章 h1 heading 锚点生成）+ 跨章 links 统一解析。"""
+    name, text = render_md_book_text(store, lang=lang)
+    return _safe_write(out_dir, name, text, encoding=encoding)
 
 
 def export_md_obsidian(store: DocStore, chapter_id: str | None, *, out_dir: Path,
